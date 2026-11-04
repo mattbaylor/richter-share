@@ -1,0 +1,10 @@
+{
+	"accountId": "your-cloudflare-account-id",
+	"dashboardHost": "richter.example.com",
+	"publicHost": "status.example.com",
+	"accessTeamDomain": "your-team.cloudflareaccess.com",
+	"accessAud": "aud-tag-of-the-dashboard-access-application",
+	"ownerEmail": "you@example.com",
+	"accessAppId": "",
+	"subrequestBudget": "40"
+}
