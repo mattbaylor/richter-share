@@ -75,6 +75,16 @@ In the dashboard, open **Systems → Add system** and run the install command it
 
 Create a **Heartbeat** monitor and have your job call its ping URL, `https://<publicHost>/ping/<token>` (`/start`, `/fail` or `/<exit code>` suffixes work too, as does Uptime Kuma's `?status=up&msg=&ping=`). Treat the token like a password.
 
+## Migrating from Uptime Robot
+
+`scripts/uptimerobot-import.py` turns your Uptime Robot monitors into a backup file you can load with **Settings → Import**:
+
+```sh
+python3 scripts/uptimerobot-import.py --api-key "$UPTIMEROBOT_API_KEY" --ntfy-topic richter --ntfy-server https://ntfy.example.com
+```
+
+It writes `richter-import.json` and `migration-report.md`, which lists how each monitor was mapped. HTTP and keyword monitors become HTTP checks and port monitors become TCP checks. Ping and port 25 monitors are imported paused, because Workers can't make those checks. Heartbeat monitors get new ping URLs, so you'll need to point your jobs at them. Import only adds monitors and never deletes any. Keep both output files out of git, because they can contain an ntfy token.
+
 ## Configuration
 
 `cloudflare.config.ts` reads `richter.config.json`; a `RICHTER_*` environment variable overrides each key.
