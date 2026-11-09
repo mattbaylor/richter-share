@@ -135,6 +135,28 @@ describe("Hub", () => {
 		expect(ups).toHaveLength(1);
 	});
 
+	it("drops an outbox entry D1 rejects instead of blocking every later write", async () => {
+		await minute(3, true);
+		// A replayed incident INSERT whose row already exists (the batch wrote it, the snapshot did not see that).
+		d1.sql.prepare("INSERT INTO incidents(id, monitor_id, started_at, cause) VALUES ('dup', 'hb', ?, 'old')").run(T0);
+		const S = (hubObj as unknown as { S: { outbox: Record<string, { sql: string; params: unknown[] }> } }).S;
+		S.outbox["i:hb:1:0"] = { sql: "INSERT INTO incidents(id, monitor_id, started_at, cause) VALUES (?, ?, ?, ?)", params: ["dup", "hb", T0, "old"] };
+		await minute(8); // goes down: this flush hits the bad entry
+		expect(mon().status).toBe("down");
+		expect(Object.keys(S.outbox).filter((k) => k.startsWith("i:hb:1:"))).toHaveLength(0);
+		await minute(2, true);
+		expect(mon().status).toBe("up");
+		expect(incidents().every((i) => i.resolved_at != null)).toBe(true);
+	});
+
+	it("closes incidents left open on a monitor that is up at the hourly roll", async () => {
+		await minute(3, true);
+		d1.sql.prepare("INSERT INTO incidents(id, monitor_id, started_at, cause) VALUES ('stale', 'hb', ?, 'HTTP 404')").run(T0);
+		expect(incidents()[0].resolved_at).toBeNull();
+		await minute(60, true);
+		expect(incidents()[0].resolved_at).not.toBeNull();
+	});
+
 	it("survives a restart from DO storage and flushes history hourly", async () => {
 		await minute(5, true);
 		hubObj = make(); // new isolate: state comes back from storage, not D1
