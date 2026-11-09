@@ -6,6 +6,7 @@ import type { Env } from "./env";
 import { overlay } from "./hub";
 import { hub, hubView } from "./hub-client";
 import type { MonitorRow } from "./monitors/engine";
+import { flushNotificationQueue } from "./notify";
 import { admin } from "./routes/admin";
 import { hostInfo, pub } from "./routes/public";
 
@@ -86,8 +87,12 @@ export default {
 		const cpu: Record<string, number> = {};
 		const polling = pollAgents(env, cpu);
 		await Promise.race([polling, new Promise((r) => setTimeout(r, POLL_WAIT_MS))]);
-		const [r, polled] = await Promise.all([hub(env).tick(event.scheduledTime, { ...cpu }), polling]);
-		console.log(`cron: ${r.ran} checks, ${r.skipped} deferred${r.busy ? " (previous tick still running)" : ""}, ${polled} systems polled`);
+		// Alerts held back by notification batching go out here, one combined message per channel (see notify.ts).
+		const flushing = ensureSchema(env.DB).then(() => flushNotificationQueue(env, event.scheduledTime), () => 0);
+		const [r, polled, flushed] = await Promise.all([hub(env).tick(event.scheduledTime, { ...cpu }), polling, flushing]);
+		console.log(
+			`cron: ${r.ran} checks, ${r.skipped} deferred${r.busy ? " (previous tick still running)" : ""}, ${polled} systems polled${flushed ? `, ${flushed} batched alerts sent` : ""}`,
+		);
 	},
 } satisfies ExportedHandler<Env>;
 

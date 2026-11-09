@@ -140,6 +140,23 @@ ALTER TABLE status_pages ADD COLUMN show_mobile_sparklines INTEGER NOT NULL DEFA
 CREATE TABLE IF NOT EXISTS system_smart (system_id TEXT PRIMARY KEY, devices TEXT NOT NULL DEFAULT '[]', hash TEXT,
   updated_at INTEGER NOT NULL, checked_at INTEGER)
 `,
+	// Notification batching (see notify.ts): when each channel last sent, and the alerts held back
+	// for the next per-minute flush because that channel had sent within the batch window.
+	`
+CREATE TABLE IF NOT EXISTS notification_throttle (channel_id TEXT PRIMARY KEY, last_sent_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS notification_queue (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	ts INTEGER NOT NULL,
+	channel_id TEXT NOT NULL,
+	title TEXT NOT NULL,
+	body TEXT NOT NULL,
+	status TEXT NOT NULL,
+	name TEXT NOT NULL,
+	url TEXT,
+	target_kind TEXT NOT NULL,
+	target_id TEXT
+)
+`,
 ];
 
 let migratedIsolate = false;
