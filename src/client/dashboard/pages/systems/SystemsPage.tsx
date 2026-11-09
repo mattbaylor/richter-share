@@ -144,7 +144,7 @@ export function SystemsPage() {
 		const q = query.trim().toLowerCase();
 		const list = (data ?? []).filter(
 			(s) =>
-				(!q || s.name.toLowerCase().includes(q) || s.info?.h?.toLowerCase().includes(q) || s.tags.some((t) => t.toLowerCase().includes(q))) &&
+				(!q || s.name.toLowerCase().includes(q) || s.info?.h?.toLowerCase().includes(q) || s.tags.some((t) => t.toLowerCase().includes(q)) || s.description?.toLowerCase().includes(q) || s.provides.some((p) => p.toLowerCase().includes(q))) &&
 				tags.every((t) => s.tags.includes(t)) &&
 				(kind === "all" || s.kind === kind),
 		);

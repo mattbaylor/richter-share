@@ -57,6 +57,7 @@ import { AlertsDialog } from "./AlertsDialog";
 import { InstallInfo } from "./InstallInfo";
 import { ProxmoxGuests } from "./ProxmoxGuests";
 import { SmartDisks } from "./SmartDisks";
+import { SystemAbout } from "./SystemAbout";
 import { Packages, Services, scrollTo, UpdateChips } from "./SystemUpdates";
 import { useCanEdit } from "@/dashboard/role";
 
@@ -548,6 +549,7 @@ export function SystemDetail({ id }: { id: string }) {
 					</div>
 				</Card>
 			)}
+			{s && <SystemAbout system={s} canEdit={canEdit} onSaved={sys.setData} />}
 			<div className="mb-4 flex flex-wrap items-center justify-between gap-3">
 				<Segmented value={range} onChange={setRange} options={RANGES} />
 				<div className="flex items-center gap-3">

@@ -157,6 +157,14 @@ CREATE TABLE IF NOT EXISTS notification_queue (
 	target_id TEXT
 )
 `,
+	// Per-system documentation: what the system does, the services it provides, and the systems (or outside
+	// services) it depends on and works with. Links are system ids when they name a system, free text otherwise.
+	`
+ALTER TABLE systems ADD COLUMN description TEXT;
+ALTER TABLE systems ADD COLUMN provides TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE systems ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE systems ADD COLUMN works_with TEXT NOT NULL DEFAULT '[]'
+`,
 ];
 
 let migratedIsolate = false;

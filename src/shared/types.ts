@@ -102,6 +102,17 @@ export interface SystemRecord {
 	 * Down and count it (60 = 1 min, the default and minimum). Dashboard and alerts ignore it.
 	 */
 	down_after: number;
+	/** What the system does, in the owner's words (plain text, may span lines). */
+	description: string | null;
+	/** Services it provides, e.g. "Caddy reverse proxy for 64.111.22.170". */
+	provides: string[];
+	/**
+	 * What it needs in order to work. Each entry is a system id when it refers to another system,
+	 * otherwise free text for something outside Richter (e.g. "Cloudflare DNS").
+	 */
+	depends_on: string[];
+	/** Systems or outside services it cooperates with (same id-or-text entries as depends_on). */
+	works_with: string[];
 	/** Physical host, VM or LXC container (see classifySystem). Set by the systems list. */
 	kind?: SystemKind;
 }

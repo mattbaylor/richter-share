@@ -18,6 +18,10 @@ export interface SystemRow {
 	tags: string;
 	created_at: number;
 	down_after?: number | null;
+	description?: string | null;
+	provides?: string | null;
+	depends_on?: string | null;
+	works_with?: string | null;
 }
 
 export function toSystem(r: SystemRow): SystemRecord {
@@ -34,6 +38,10 @@ export function toSystem(r: SystemRow): SystemRecord {
 		tags: parseJson(r.tags, []),
 		created_at: r.created_at,
 		down_after: Math.max(60, r.down_after ?? 60),
+		description: r.description ?? null,
+		provides: parseJson(r.provides ?? null, []),
+		depends_on: parseJson(r.depends_on ?? null, []),
+		works_with: parseJson(r.works_with ?? null, []),
 	};
 }
 

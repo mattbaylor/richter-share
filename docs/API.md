@@ -30,7 +30,7 @@ Public SPA routes: `/` (the default page or the custom-domain page), `/s/:slug`.
 | GET | `/systems` | | `SystemRecord[]` |
 | POST | `/systems` | `{ name, tags? }` | `{ system: SystemRecord, install: SystemInstall }` |
 | GET | `/systems/:id` | | `SystemRecord` |
-| PATCH | `/systems/:id` | `{ name?, tags? }` | `SystemRecord` |
+| PATCH | `/systems/:id` | `{ name?, tags?, down_after?, description?, provides?, depends_on?, works_with? }` (the last three are string lists: a system id links to that system, anything else is free text) | `SystemRecord` |
 | DELETE | `/systems/:id` | | `{ ok }` |
 | GET | `/systems/:id/install` | | `SystemInstall` |
 | POST | `/systems/:id/pause` · `/resume` · `/reset-fingerprint` | | `SystemRecord` |
