@@ -8,6 +8,7 @@ import { hub, hubView } from "./hub-client";
 import type { MonitorRow } from "./monitors/engine";
 import { admin } from "./routes/admin";
 import { hostInfo, pub } from "./routes/public";
+import { flushBatches } from "./notify";
 
 export { AgentConnection } from "./beszel/agent-do";
 export { Hub } from "./hub";
@@ -87,7 +88,9 @@ export default {
 		const polling = pollAgents(env, cpu);
 		await Promise.race([polling, new Promise((r) => setTimeout(r, POLL_WAIT_MS))]);
 		const [r, polled] = await Promise.all([hub(env).tick(event.scheduledTime, { ...cpu }), polling]);
-		console.log(`cron: ${r.ran} checks, ${r.skipped} deferred${r.busy ? " (previous tick still running)" : ""}, ${polled} systems polled`);
+		// Batched channels (ntfy): send what queued up during the last window as one digest per channel.
+		const digests = await flushBatches(env, Date.now());
+		console.log(`cron: ${r.ran} checks, ${r.skipped} deferred${r.busy ? " (previous tick still running)" : ""}, ${polled} systems polled${digests ? `, ${digests} digests sent` : ""}`);
 	},
 } satisfies ExportedHandler<Env>;
 

@@ -140,6 +140,13 @@ ALTER TABLE status_pages ADD COLUMN show_mobile_sparklines INTEGER NOT NULL DEFA
 CREATE TABLE IF NOT EXISTS system_smart (system_id TEXT PRIMARY KEY, devices TEXT NOT NULL DEFAULT '[]', hash TEXT,
   updated_at INTEGER NOT NULL, checked_at INTEGER)
 `,
+	// Batched channels (ntfy): when each last sent, and the alerts waiting for the next digest.
+	`
+CREATE TABLE IF NOT EXISTS notify_batch (channel_id TEXT PRIMARY KEY, last_sent INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS notify_pending (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_id TEXT NOT NULL, ts INTEGER NOT NULL,
+  target_kind TEXT NOT NULL, target_id TEXT, msg TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS notify_pending_channel ON notify_pending(channel_id, id)
+`,
 ];
 
 let migratedIsolate = false;

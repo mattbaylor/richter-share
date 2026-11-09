@@ -107,12 +107,18 @@ interface LogChannel {
 	type: string;
 }
 
+type LogEntry = { target: LogTarget; m: NotifyMessage; ch: LogChannel; error: string | null };
+
 /** Notification log rows for one notification (one per channel): a single D1 batch, never throws. */
 export async function logNotifications(env: Env, target: LogTarget, m: NotifyMessage, results: { ch: LogChannel; error: string | null }[], now = Date.now()): Promise<void> {
-	if (!results.length) return;
+	await logEntries(env, results.map(({ ch, error }) => ({ target, m, ch, error })), now);
+}
+
+async function logEntries(env: Env, entries: LogEntry[], now: number): Promise<void> {
+	if (!entries.length) return;
 	try {
 		await env.DB.batch(
-			results.map(({ ch, error }) =>
+			entries.map(({ target, m, ch, error }) =>
 				env.DB.prepare(
 					"INSERT INTO notification_log(ts, channel_id, channel_name, channel_type, title, body, status, target_kind, target_id, target_name, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				).bind(now, ch.id, ch.name, ch.type, m.title.slice(0, 200), m.body.slice(0, 500), m.status, target.kind, target.id, m.name, error ? 0 : 1, error ? error.slice(0, 300) : null),
@@ -123,8 +129,64 @@ export async function logNotifications(env: Env, target: LogTarget, m: NotifyMes
 	}
 }
 
+/**
+ * Channel types whose alerts are batched: at most one message per BATCH_WINDOW_MS per channel.
+ * The first alert after a quiet window goes out at once; later ones wait in notify_pending and the
+ * cron sends them as one digest (flushBatches). A self-hosted ntfy relays every message to ntfy.sh
+ * for iOS push, and ntfy.sh rate-limits (HTTP 429) the bursts a reboot or outage produces.
+ */
+const BATCHED = new Set(["ntfy"]);
+export const BATCH_WINDOW_MS = 60_000;
+const DIGEST_MAX_CHARS = 3500; // ntfy's message limit is 4096 bytes
+const FLUSH_MAX_ROWS = 500;
+
+/** Take the channel's send slot if the window has passed (and, for a live alert, nothing is queued). Atomic in D1. */
+async function claimSlot(env: Env, channelId: string, now: number, requireEmptyQueue: boolean): Promise<boolean> {
+	const r = await env.DB.prepare(
+		`INSERT INTO notify_batch(channel_id, last_sent) VALUES (?1, ?2)
+		 ON CONFLICT(channel_id) DO UPDATE SET last_sent = excluded.last_sent
+		 WHERE notify_batch.last_sent <= ?3${requireEmptyQueue ? " AND NOT EXISTS (SELECT 1 FROM notify_pending WHERE channel_id = ?1)" : ""}`,
+	)
+		.bind(channelId, now, now - BATCH_WINDOW_MS)
+		.run();
+	return (r.meta?.changes ?? 0) > 0;
+}
+
+const ORDER: NotifyMessage["status"][] = ["down", "warning", "up", "info"];
+const LABEL: Record<NotifyMessage["status"], string> = { down: "down", warning: "warning", up: "up", info: "info" };
+
+/** One message summarising several queued alerts, oldest first. */
+export function digest(ms: NotifyMessage[]): NotifyMessage {
+	const count = (s: NotifyMessage["status"]) => ms.filter((m) => m.status === s).length;
+	const parts = ORDER.filter((s) => count(s) > 0).map((s) => `${count(s)} ${LABEL[s]}`);
+	const status = ORDER.find((s) => count(s) > 0) ?? "info";
+	const lines: string[] = [];
+	let len = 0;
+	for (const [i, m] of ms.entries()) {
+		const line = `${m.title}${m.body ? `: ${m.body}` : ""}`.replace(/\s*\n\s*/g, " ");
+		if (len + line.length + 1 > DIGEST_MAX_CHARS) {
+			lines.push(`...and ${ms.length - i} more (see the notification log)`);
+			break;
+		}
+		lines.push(line);
+		len += line.length + 1;
+	}
+	return { title: `${ms.length} alerts (${parts.join(", ")})`, body: lines.join("\n"), status, name: "Richter" };
+}
+
+async function sendLogged(ch: ChannelRow, m: NotifyMessage): Promise<{ ch: ChannelRow; error: string | null }> {
+	try {
+		await sendToChannel(ch.type, parseJson(ch.config, {}), m);
+		return { ch, error: null };
+	} catch (e) {
+		const error = (e as Error).message || String(e);
+		console.error(`notify ${ch.type}:${ch.name} failed`, error);
+		return { ch, error };
+	}
+}
+
 /** Send to every enabled channel linked to a monitor or system, and log each result. Failures are logged, never thrown. */
-export async function notify(env: Env, target: { monitorId?: string; systemId?: string }, m: NotifyMessage): Promise<void> {
+export async function notify(env: Env, target: { monitorId?: string; systemId?: string }, m: NotifyMessage, now = Date.now()): Promise<void> {
 	const rows = target.monitorId
 		? await env.DB.prepare(
 				"SELECT n.* FROM notifications n JOIN monitor_notifications mn ON mn.notification_id = n.id WHERE mn.monitor_id = ? AND n.enabled = 1",
@@ -136,17 +198,52 @@ export async function notify(env: Env, target: { monitorId?: string; systemId?: 
 			)
 				.bind(target.systemId)
 				.all<ChannelRow>();
+	const logTarget: LogTarget = target.monitorId ? { kind: "monitor", id: target.monitorId } : { kind: "system", id: target.systemId ?? null };
 	const results = await Promise.all(
 		rows.results.map(async (ch) => {
-			try {
-				await sendToChannel(ch.type, parseJson(ch.config, {}), m);
-				return { ch, error: null };
-			} catch (e) {
-				const error = (e as Error).message || String(e);
-				console.error(`notify ${ch.type}:${ch.name} failed`, error);
-				return { ch, error };
+			if (BATCHED.has(ch.type)) {
+				try {
+					if (!(await claimSlot(env, ch.id, now, true))) {
+						await env.DB.prepare("INSERT INTO notify_pending(channel_id, ts, target_kind, target_id, msg) VALUES (?, ?, ?, ?, ?)")
+							.bind(ch.id, now, logTarget.kind, logTarget.id, JSON.stringify(m))
+							.run();
+						return null; // logged when the digest goes out
+					}
+				} catch (e) {
+					console.error(`notify batch ${ch.name}: D1 failed, sending now`, (e as Error).message);
+				}
 			}
+			return sendLogged(ch, m);
 		}),
 	);
-	await logNotifications(env, target.monitorId ? { kind: "monitor", id: target.monitorId } : { kind: "system", id: target.systemId ?? null }, m, results);
+	await logNotifications(env, logTarget, m, results.filter((r) => r !== null), now);
+}
+
+/** Cron: send each batched channel's queued alerts as one message once its window has passed. Never throws. */
+export async function flushBatches(env: Env, now = Date.now()): Promise<number> {
+	let sent = 0;
+	try {
+		const { results: due } = await env.DB.prepare(
+			"SELECT DISTINCT p.channel_id FROM notify_pending p LEFT JOIN notify_batch b ON b.channel_id = p.channel_id WHERE b.last_sent IS NULL OR b.last_sent <= ?",
+		)
+			.bind(now - BATCH_WINDOW_MS)
+			.all<{ channel_id: string }>();
+		for (const { channel_id } of due) {
+			if (!(await claimSlot(env, channel_id, now, false))) continue; // another tick got it
+			const { results: queued } = await env.DB.prepare("SELECT id, target_kind, target_id, msg FROM notify_pending WHERE channel_id = ? ORDER BY id LIMIT ?")
+				.bind(channel_id, FLUSH_MAX_ROWS)
+				.all<{ id: number; target_kind: LogTarget["kind"]; target_id: string | null; msg: string }>();
+			if (!queued.length) continue;
+			await env.DB.prepare("DELETE FROM notify_pending WHERE channel_id = ? AND id <= ?").bind(channel_id, queued[queued.length - 1].id).run();
+			const ch = await env.DB.prepare("SELECT * FROM notifications WHERE id = ? AND enabled = 1").bind(channel_id).first<ChannelRow>();
+			if (!ch) continue; // channel deleted or disabled meanwhile: drop its queue
+			const items = queued.map((q) => ({ target: { kind: q.target_kind, id: q.target_id }, m: parseJson<NotifyMessage>(q.msg, { title: "?", body: "", status: "info", name: "?" }) }));
+			const { error } = await sendLogged(ch, items.length === 1 ? items[0].m : digest(items.map((x) => x.m)));
+			await logEntries(env, items.map(({ target, m }) => ({ target, m, ch, error })), now);
+			sent++;
+		}
+	} catch (e) {
+		console.error("notify batch flush failed", (e as Error).message);
+	}
+	return sent;
 }
