@@ -1,5 +1,5 @@
 import type { GuestMonitorConfig, GuestType, PveGuest, PveSnapshot, PveStorage } from "../../shared/types";
-import { addEvent, newId, parseJson } from "../db";
+import { addEvent, parseJson } from "../db";
 import type { Env } from "../env";
 import { hubReload } from "../hub-client";
 import type { CheckResult } from "../monitors/checks";
@@ -122,6 +122,15 @@ function fmtBytes(b: number): string {
 	return gib >= 1 ? `${gib.toFixed(gib >= 10 ? 0 : 1)} GiB` : `${Math.round(b / 1024 ** 2)} MiB`;
 }
 
+/** Deterministic 15-character monitor id for a key, so concurrent discoveries converge on one row. */
+async function stableId(prefix: string, key: string): Promise<string> {
+	const h = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
+	const A = "abcdefghijklmnopqrstuvwxyz0123456789";
+	let out = prefix;
+	for (let i = 0; out.length < 15; i++) out += A[h[i] % A.length];
+	return out;
+}
+
 /** Ids of the guests that should have monitors (templates are skipped), as a stable key. */
 export const guestKey = (snap: PveSnapshot) =>
 	snap.guests
@@ -146,28 +155,35 @@ export async function discoverGuests(env: Env, systemId: string, systemName: str
 	if (!missing.length) return 0;
 
 	const stmts: D1PreparedStatement[] = [];
-	const addDefaults = (id: string) => db.prepare("INSERT INTO monitor_notifications(monitor_id, notification_id) SELECT ?, id FROM notifications WHERE apply_default = 1").bind(id);
+	const addDefaults = (id: string) =>
+		db.prepare("INSERT OR IGNORE INTO monitor_notifications(monitor_id, notification_id) SELECT ?, id FROM notifications WHERE apply_default = 1").bind(id);
 	const insert = (id: string, name: string, type: string, config: object, parent: string | null, paused: boolean, description: string, tags: string[]) =>
 		db
 			.prepare(
-				`INSERT INTO monitors(id, name, type, config, parent_id, interval_s, retries, retry_interval_s, timeout_ms, paused, description, tags, next_check_at, created_at)
+				`INSERT OR IGNORE INTO monitors(id, name, type, config, parent_id, interval_s, retries, retry_interval_s, timeout_ms, paused, description, tags, next_check_at, created_at)
 				 VALUES (?, ?, ?, ?, ?, 60, 1, 60, 10000, ?, ?, ?, ?, ?)`,
 			)
 			.bind(id, name, type, JSON.stringify(config), parent, paused ? 1 : 0, description, JSON.stringify(tags), now, now);
 
 	let groupId = (groups.results[0] as { id: string } | undefined)?.id ?? null;
 	if (!groupId) {
-		groupId = newId();
+		// Stable ids: the install push and the timer's first run can arrive together, and
+		// INSERT OR IGNORE on a deterministic id keeps the second one from duplicating anything.
+		groupId = await stableId("pvg", systemId);
 		stmts.push(insert(groupId, `${systemName} guests`.slice(0, 100), "group", { pve_system_id: systemId }, null, false, `Proxmox guests on ${snap.node}, discovered by richter-pve.`, ["proxmox", snap.node]), addDefaults(groupId));
 	}
+	const guestIdx: number[] = [];
 	for (const g of missing) {
-		const id = newId();
+		const id = await stableId("pve", `${systemId}:${g.vmid}`);
+		guestIdx.push(stmts.length);
 		const cfg: GuestMonitorConfig = { system_id: systemId, vmid: g.vmid, guest_type: g.type };
 		const desc = g.onboot ? `Proxmox ${label(g.type)} on ${snap.node}, discovered by richter-pve.` : `Proxmox ${label(g.type)} on ${snap.node}, discovered by richter-pve. Created paused because it is not set to start on boot.`;
 		stmts.push(insert(id, guestMonitorName(g), "guest", cfg, groupId, !g.onboot, desc, ["proxmox", g.type === "lxc" ? "lxc" : "vm", snap.node]), addDefaults(id));
 	}
-	await db.batch(stmts);
-	await addEvent(db, "monitor_added", groupId, `${systemName}: discovered ${missing.length} Proxmox guest${missing.length === 1 ? "" : "s"} (${missing.map((g) => g.vmid).join(", ")})`);
+	const results = await db.batch(stmts);
+	const added = missing.filter((_, i) => Number(results[guestIdx[i]]?.meta?.changes ?? 0) > 0);
+	if (!added.length) return 0;
+	await addEvent(db, "monitor_added", groupId, `${systemName}: discovered ${added.length} Proxmox guest${added.length === 1 ? "" : "s"} (${added.map((g) => g.vmid).join(", ")})`);
 	await hubReload(env);
-	return missing.length;
+	return added.length;
 }

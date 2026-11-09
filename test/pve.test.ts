@@ -127,6 +127,35 @@ describe("discoverGuests", () => {
 		expect(d1.sql.prepare("SELECT COUNT(*) n FROM monitors WHERE type = 'group'").get()).toEqual({ n: 1 });
 		expect(d1.sql.prepare("SELECT COUNT(*) n FROM monitors WHERE name = 'renamed'").get()).toEqual({ n: 1 });
 	});
+	it("two pushes racing each other create one group and one monitor per guest", async () => {
+		const { d1, env } = setup();
+		// Hold both callers' initial SELECT batch until both have read, so each sees no monitors yet.
+		let arrived = 0;
+		let release!: () => void;
+		const bothRead = new Promise<void>((r) => (release = r));
+		const db = env.DB;
+		const racing = {
+			...env,
+			DB: new Proxy(db, {
+				get: (t, k) =>
+					k === "batch"
+						? async (stmts: D1PreparedStatement[]) => {
+								const r = await t.batch(stmts);
+								if (stmts.length === 2 && ++arrived <= 2) {
+									if (arrived === 2) release();
+									await bothRead;
+								}
+								return r;
+							}
+						: (Reflect.get(t, k) as unknown),
+			}),
+		} as Env;
+		const counts = await Promise.all([discoverGuests(racing, "sys1", "pve02", snap, NOW), discoverGuests(racing, "sys1", "pve02", snap, NOW)]);
+		expect(counts[0] + counts[1]).toBe(4);
+		expect(d1.sql.prepare("SELECT COUNT(*) n FROM monitors WHERE type = 'group'").get()).toEqual({ n: 1 });
+		expect(d1.sql.prepare("SELECT COUNT(*) n FROM monitors WHERE type = 'guest'").get()).toEqual({ n: 4 });
+		expect(d1.sql.prepare("SELECT COUNT(*) n FROM monitor_notifications").get()).toEqual({ n: 5 });
+	});
 });
 
 describe("richter-pve script", () => {
