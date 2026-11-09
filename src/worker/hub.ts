@@ -401,15 +401,38 @@ export class Hub extends DurableObject<Env> {
 	private async flush(extra: Stmt[] = []): Promise<boolean> {
 		const entries = Object.entries(this.S.outbox);
 		if (!entries.length && !extra.length) return true;
+		const run = (list: Stmt[]) => this.db.batch(list.map((s) => this.db.prepare(s.sql).bind(...s.params)));
+		const done = (k: string, s: Stmt) => {
+			if (this.S.outbox[k] === s) delete this.S.outbox[k];
+		};
 		try {
-			await this.db.batch([...entries.map(([, s]) => s), ...extra].map((s) => this.db.prepare(s.sql).bind(...s.params)));
-			for (const [k, s] of entries) if (this.S.outbox[k] === s) delete this.S.outbox[k];
+			await run([...entries.map(([, s]) => s), ...extra]);
+			for (const [k, s] of entries) done(k, s);
 			return true;
 		} catch (e) {
 			console.error("hub: D1 flush failed", (e as Error).message);
 			this.mustSave = true; // keep the outbox across an eviction
-			return false;
 		}
+		// The batch is one transaction, so a single bad statement (say an incident INSERT replayed from a
+		// snapshot taken before the batch that already wrote it) would block every later write forever.
+		// Retry one statement at a time: if D1 is reachable at all, drop the statements it rejects.
+		const failed: [string, Stmt, string][] = [];
+		let ok = 0;
+		for (const [k, s] of [...entries, ...extra.map((s, i) => [`x:${i}`, s] as [string, Stmt])]) {
+			try {
+				await run([s]);
+				done(k, s);
+				ok++;
+			} catch (e) {
+				failed.push([k, s, (e as Error).message]);
+			}
+		}
+		if (!ok) return false; // D1 itself is failing: keep everything for the next try
+		for (const [k, s, msg] of failed) {
+			console.error(`hub: dropping outbox entry ${k} that D1 rejects: ${msg}`);
+			done(k, s);
+		}
+		return !failed.length;
 	}
 
 	/** Hour and day boundaries: queue every bucket, daily row and hot row for D1. */
@@ -434,6 +457,17 @@ export class Hub extends DurableObject<Env> {
 		}
 		for (const id of Object.keys(S.live)) this.queueMonitor(id);
 		this.queueSystems();
+		// Close incidents left open on monitors that are no longer down (a recovery that came through
+		// maintenance or a pause, a state reset, a lost write) or that no longer exist (a monitor row
+		// deleted straight from D1 leaves its incidents behind). Cheap once an hour, and self-healing.
+		const notDown = Object.entries(S.live)
+			.filter(([, l]) => l.status === "up" || l.status === "running" || l.status === "degraded")
+			.map(([id]) => id);
+		S.outbox[`r:${hour}`] = {
+			sql: `UPDATE incidents SET resolved_at = ? WHERE resolved_at IS NULL AND started_at < ?
+			 AND (monitor_id IN (SELECT value FROM json_each(?)) OR monitor_id NOT IN (SELECT id FROM monitors))`,
+			params: [now, now, JSON.stringify(notDown)],
+		};
 		S.bucket = {};
 		if (newDay) {
 			S.daily = {};
@@ -568,7 +602,7 @@ export class Hub extends DurableObject<Env> {
 
 		const extra: Stmt[] = [];
 		if (s.transition === "down") {
-			extra.push({ sql: "INSERT INTO incidents(id, monitor_id, started_at, cause, last_notified_at) VALUES (?, ?, ?, ?, ?)", params: [newId(), m.id, now, s.message, now] });
+			extra.push({ sql: "INSERT OR IGNORE INTO incidents(id, monitor_id, started_at, cause, last_notified_at) VALUES (?, ?, ?, ?, ?)", params: [newId(), m.id, now, s.message, now] });
 		} else if (s.transition === "up") {
 			extra.push({ sql: "UPDATE incidents SET resolved_at = ? WHERE monitor_id = ? AND resolved_at IS NULL", params: [now, m.id] });
 		}
