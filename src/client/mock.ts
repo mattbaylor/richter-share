@@ -111,6 +111,10 @@ function mkSystem(name: string, status: SystemRecord["status"], tags: string[], 
 		tags,
 		created_at: now() - 40 * DAY,
 		down_after: 60,
+		description: null,
+		provides: [],
+		depends_on: [],
+		works_with: [],
 	};
 }
 
@@ -568,7 +572,7 @@ on("GET", `${A}/systems`, () => {
 });
 on("POST", `${A}/systems`, (_, b) => {
 	if (!b?.name) throw new ApiError("name is required", 400, "name");
-	const s: SystemRecord = { id: id15(), name: b.name, status: "pending", info: null, details: null, agent_version: null, last_seen: null, connected_at: null, fingerprint_bound: false, tags: b.tags ?? [], created_at: now(), down_after: 60 };
+	const s: SystemRecord = { id: id15(), name: b.name, status: "pending", info: null, details: null, agent_version: null, last_seen: null, connected_at: null, fingerprint_bound: false, tags: b.tags ?? [], created_at: now(), down_after: 60, description: null, provides: [], depends_on: [], works_with: [] };
 	systems.push(s);
 	profiles[s.id] = { cpuBase: 20, memTotal: 4 * GB, memBase: 0.4, disk: 80 * GB, diskUsed: 0.3, cores: 2, temps: ["cpu"] };
 	// Simulate the agent connecting after ~8 seconds.

@@ -254,15 +254,41 @@ admin.post("/systems", async (c) => {
 
 admin.get("/systems/:id", async (c) => c.json(toSystem(await must(getSystemRow(c.env, c.req.param("id")), "System not found"))));
 
+/** Documentation link lists: system ids or free text, one item each. */
+const docList = z.array(z.string().max(300)).max(100);
+/** Trim, drop blanks, duplicates and links to the system itself. */
+function cleanDocList(items: string[], selfId: string): string[] {
+	const out: string[] = [];
+	for (const raw of items) {
+		const v = raw.trim();
+		if (v && v !== selfId && !out.includes(v)) out.push(v);
+	}
+	return out;
+}
+
 admin.patch("/systems/:id", async (c) => {
 	const id = c.req.param("id");
 	await must(getSystemRow(c.env, id), "System not found");
 	const body = z
-		.object({ name: z.string().min(1).max(80).optional(), tags: tags.optional(), down_after: z.number().int().min(60).max(86_400).optional() })
+		.object({
+			name: z.string().min(1).max(80).optional(),
+			tags: tags.optional(),
+			down_after: z.number().int().min(60).max(86_400).optional(),
+			description: z.string().max(20_000).nullable().optional(),
+			provides: docList.optional(),
+			depends_on: docList.optional(),
+			works_with: docList.optional(),
+		})
 		.parse(await c.req.json());
 	if (body.name) await c.env.DB.prepare("UPDATE systems SET name = ? WHERE id = ?").bind(body.name, id).run();
 	if (body.tags) await c.env.DB.prepare("UPDATE systems SET tags = ? WHERE id = ?").bind(JSON.stringify(body.tags), id).run();
 	if (body.down_after != null) await c.env.DB.prepare("UPDATE systems SET down_after = ? WHERE id = ?").bind(body.down_after, id).run();
+	if (body.description !== undefined)
+		await c.env.DB.prepare("UPDATE systems SET description = ? WHERE id = ?").bind(body.description?.trim() || null, id).run();
+	for (const k of ["provides", "depends_on", "works_with"] as const) {
+		const v = body[k];
+		if (v) await c.env.DB.prepare(`UPDATE systems SET ${k} = ? WHERE id = ?`).bind(JSON.stringify(cleanDocList(v, id)), id).run();
+	}
 	return c.json(toSystem((await getSystemRow(c.env, id))!));
 });
 
