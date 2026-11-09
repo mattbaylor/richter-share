@@ -82,7 +82,7 @@ function uptimeText(s?: number): string | null {
 /**
  * One guest monitor check. LXC and VM are judged differently: an LXC's memory and rootfs are its
  * own cgroup/volume limits, so both are checked; a VM's disk is only known with the QEMU guest
- * agent (Proxmox reports 0 otherwise), and its memory is the host's view of the guest.
+ * agent (Proxmox reports 0 otherwise), and its memory is not checked at all (see below).
  * Returns null for a stopped guest that is not set to start on boot (nothing to record).
  */
 export function checkGuest(cfg: GuestMonitorConfig, snap: PveSnapshot | null, now = Date.now()): CheckResult | null {
@@ -94,9 +94,11 @@ export function checkGuest(cfg: GuestMonitorConfig, snap: PveSnapshot | null, no
 	if (g.status === "running") {
 		const parts = ["running", uptimeText(g.uptime)];
 		const warns: string[] = [];
-		// A VM that doesn't report its own memory use (balloon disabled, or no virtio balloon driver,
-		// e.g. Windows with balloon: 0 or pfSense) shows mem == maxmem: unknown, not 100% used.
-		const mem = g.type === "qemu" && g.maxmem && (g.mem ?? 0) >= g.maxmem ? null : pct(g.mem, g.maxmem);
+		// VM memory as Proxmox reports it is never a usable "used" figure: with the balloon driver it is
+		// total - free inside the guest, so page cache counts as used (a healthy mailcow VM shows 92%);
+		// without it, it is the host's RSS for the whole VM (pfSense, Windows), close to 100% forever.
+		// Real VM memory comes from a Beszel agent in the guest, so only LXC memory is judged here.
+		const mem = g.type === "qemu" ? null : pct(g.mem, g.maxmem);
 		const memWarn = cfg.mem_warn ?? DEFAULT_WARN;
 		if (mem != null) {
 			parts.push(`mem ${mem.toFixed(0)}%`);

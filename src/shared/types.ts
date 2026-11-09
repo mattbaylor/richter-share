@@ -243,7 +243,7 @@ export interface GuestMonitorConfig {
 	system_id: string;
 	vmid: number;
 	guest_type: GuestType;
-	/** Percent of the guest's own memory limit that marks it Degraded (default 90). */
+	/** LXC only: percent of the container's own memory limit that marks it Degraded (default 90). VM memory is not judged. */
 	mem_warn?: number;
 	/** Percent of the guest's own disk (LXC rootfs; VMs only with the QEMU guest agent) that marks it Degraded (default 90). */
 	disk_warn?: number;

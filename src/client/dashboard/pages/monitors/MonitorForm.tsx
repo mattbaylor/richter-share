@@ -579,9 +579,11 @@ export function MonitorForm({ id }: { id?: string }) {
 									</Select>
 								</Field>
 							</div>
-							<Field label="Memory warning %" error={errors.mem_warn} hint={form.guest_type === "lxc" ? "Of the container's own memory limit. Default 90." : "Of the VM's assigned memory, as the host sees it. Default 90."}>
-								<Input type="number" min={1} max={100} value={form.mem_warn} onChange={txt("mem_warn")} placeholder="90" />
-							</Field>
+							{form.guest_type === "lxc" && (
+								<Field label="Memory warning %" error={errors.mem_warn} hint="Of the container's own memory limit. Default 90.">
+									<Input type="number" min={1} max={100} value={form.mem_warn} onChange={txt("mem_warn")} placeholder="90" />
+								</Field>
+							)}
 							<Field label="Disk warning %" error={errors.disk_warn} hint={form.guest_type === "lxc" ? "Of the container's rootfs. Default 90." : "Only reported when the QEMU guest agent is running in the VM. Default 90."}>
 								<Input type="number" min={1} max={100} value={form.disk_warn} onChange={txt("disk_warn")} placeholder="90" />
 							</Field>
