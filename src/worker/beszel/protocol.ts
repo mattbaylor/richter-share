@@ -48,6 +48,9 @@ export interface AgentResponse {
 	error?: string;
 	/** Decoded 0.18+ generic payload (key 7), whatever the request was. */
 	payload?: unknown;
+	/** GetSmartData reply: the agent puts SmartDataResponse.Data in key 5 and .Complete in key 8, not in key 7. */
+	smart?: Raw;
+	smartComplete?: boolean;
 }
 
 function num(v: unknown): number {
@@ -90,6 +93,9 @@ export function decodeResponse(bytes: Uint8Array, generic: "system" | "raw" = "s
 	}
 	const err = str(m.get(3));
 	if (err) out.error = err;
+	const smart = asMap(m.get(5));
+	if (smart) out.smart = smart;
+	if (m.get(8) === true) out.smartComplete = true;
 	// 0.18+ generic payload in key 7. The agent embeds it as inline CBOR (cbor.RawMessage),
 	// so it normally decodes straight to a map; tolerate a wrapped byte string as well.
 	const raw7 = m.get(7);

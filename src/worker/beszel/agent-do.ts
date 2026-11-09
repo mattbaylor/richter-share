@@ -427,7 +427,8 @@ export class AgentConnection extends DurableObject<Env> {
 		if (att.smartReq && res.id === att.smartReq.id) {
 			att.smartReq = null;
 			ws.serializeAttachment(att);
-			await this.handleSmart(att, res.payload);
+			// agent/response.go: SmartDataResponse goes in keys 5 (devices) and 8 (complete); older replies may use key 7.
+			await this.handleSmart(att, res.smart ? new Map<unknown, unknown>([[0, res.smart], [1, res.smartComplete === true]]) : res.payload);
 			return;
 		}
 		const pending = await this.ctx.storage.get<PendingPackages>("pkgReq");
@@ -537,8 +538,9 @@ export class AgentConnection extends DurableObject<Env> {
 	}
 
 	private async handleSmart(att: Attachment, payload: unknown): Promise<void> {
-		const { devices } = normalizeSmart(payload);
+		const { devices, complete } = normalizeSmart(payload);
 		const now = Date.now();
+		console.log(`smart: ${att.systemId} replied with ${devices.length} disk(s)${complete ? "" : " (incomplete)"}`);
 		const db = this.env.DB;
 		// A system that never reported disks gets no row (keeps the Disks section hidden).
 		const prev = await db.prepare("SELECT 1 FROM system_smart WHERE system_id = ?").bind(att.systemId).first();

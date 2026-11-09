@@ -39,6 +39,12 @@ describe("normalizeSmart", () => {
 		expect(r.devices[0]).toMatchObject({ key: "/dev/nvme0", name: "nvme0", status: "PASSED" });
 		expect(normalizeSmart(undefined).devices).toEqual([]);
 	});
+	it("decodeResponse exposes the agent's SMART keys 5 and 8", () => {
+		const res = decodeResponse(encode(new Map<number, unknown>([[0, 9], [5, new Map([["/dev/sda", healthy()]])], [8, true]])), "raw");
+		expect(res.smart?.size).toBe(1);
+		expect(res.smartComplete).toBe(true);
+		expect(res.payload).toBeUndefined();
+	});
 	it("survives a real CBOR round trip through decodeResponse (uint64 raw values)", () => {
 		const bytes = encode(new Map<number, unknown>([[0, 7], [7, new Map<number, unknown>([[0, new Map([["/dev/sda", disk("PASSED", [attr(241, "Total_LBAs_Written", 100, 0, 2 ** 40)])]])]])]]));
 		const res = decodeResponse(bytes, "raw");
@@ -101,7 +107,9 @@ describe("AgentConnection SMART", () => {
 		return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer;
 	};
 	const data = () => msg(new Map<number, unknown>([[0, 1], [1, new Map<number, unknown>([[0, new Map<number, unknown>([[0, 5], [2, 8], [3, 3], [9, 100], [10, 40]])], [1, new Map<number, unknown>([[0, "pve02"]])], [2, []]])]]));
-	const smartReply = (id: number, devices: [string, Map<number, unknown>][]) => msg(new Map<number, unknown>([[0, id], [7, new Map<number, unknown>([[0, new Map(devices)], [1, true]])]]));
+	// What agent/response.go actually sends for GetSmartData: AgentResponse{0: id, 5: devices, 8: complete}.
+	const smartReply = (id: number, devices: [string, Map<number, unknown>][]) =>
+		msg(new Map<number, unknown>([[0, id], ...(devices.length ? ([[5, new Map(devices)]] as [number, unknown][]) : []), [8, true]]));
 
 	it("asks once per connection and hourly, stores the disks, and alerts on FAILED then recovery", async () => {
 		const t = setup();
