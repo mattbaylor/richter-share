@@ -12,7 +12,8 @@ Import only adds or replaces rows by id; it never deletes existing Richter monit
 
 Mapping notes:
 - HTTP(S) and keyword monitors -> http (GET, 2xx/3xx plus any extra "up" codes, follow redirects).
-- Port monitors -> tcp. Port 25 is blocked from Workers, so those are imported paused.
+- Port monitors -> tcp. Port 25 is blocked from Workers: with --probe those run through the TCP
+  probe (probe/) and expect an SMTP "220" banner; without it they are imported paused.
 - Ping (ICMP) can't run on Workers -> tcp :443, imported paused for review.
 - Heartbeat monitors -> heartbeat with a NEW ping URL; repoint the jobs (see the report).
 - HTTP basic-auth credentials are not carried over.
@@ -22,6 +23,7 @@ import argparse, json, os, secrets, string, sys, time, urllib.parse, urllib.requ
 ALNUM = string.ascii_letters + string.digits
 ID_ALPHA = string.ascii_lowercase + string.digits
 PORT_SUBTYPES = {1: 80, 2: 443, 3: 21, 4: 25, 5: 110, 6: 143}
+PROBE = False  # set by --probe
 TYPE_NAMES = {1: "HTTP", 2: "Keyword", 3: "Ping", 4: "Port", 5: "Heartbeat"}
 
 
@@ -80,9 +82,12 @@ def convert(m, now):
     elif t == 4:
         port = int(m.get("port") or PORT_SUBTYPES.get(m.get("sub_type"), 0) or 0)
         mtype, cfg = "tcp", {"host": host_of(url), "port": port}
-        if port == 25:
+        if port == 25 and PROBE:
+            cfg.update(via_probe=True, expect_banner="220")
+            notes.append("Port 25: checked via the TCP probe (SMTP banner 220).")
+        elif port == 25:
             paused = True
-            notes.append("Port 25 is blocked from Workers; imported paused.")
+            notes.append("Port 25 is blocked from Workers; imported paused (rerun with --probe once probe/ is set up).")
     elif t == 3:
         mtype, cfg, paused = "tcp", {"host": host_of(url), "port": 443}, True
         notes.append("ICMP ping isn't possible on Workers; converted to TCP 443 and imported paused.")
@@ -110,7 +115,10 @@ def main():
     ap.add_argument("--report", default="migration-report.md")
     ap.add_argument("--ntfy-topic")
     ap.add_argument("--ntfy-server", default="https://ntfy.sh")
+    ap.add_argument("--probe", action="store_true", help="check port-25 monitors via the TCP probe (probe/README.md)")
     a = ap.parse_args()
+    global PROBE
+    PROBE = a.probe
 
     data = fetch(a.api_key) if a.api_key else json.load(open(a.input))
     now = int(time.time() * 1000)
