@@ -457,17 +457,17 @@ export class Hub extends DurableObject<Env> {
 		}
 		for (const id of Object.keys(S.live)) this.queueMonitor(id);
 		this.queueSystems();
-		// Close incidents left open on monitors that are no longer down: a recovery that came through
-		// maintenance or a pause, a state reset, or a lost write. Cheap once an hour, and self-healing.
+		// Close incidents left open on monitors that are no longer down (a recovery that came through
+		// maintenance or a pause, a state reset, a lost write) or that no longer exist (a monitor row
+		// deleted straight from D1 leaves its incidents behind). Cheap once an hour, and self-healing.
 		const notDown = Object.entries(S.live)
 			.filter(([, l]) => l.status === "up" || l.status === "running" || l.status === "degraded")
 			.map(([id]) => id);
-		if (notDown.length) {
-			S.outbox[`r:${hour}`] = {
-				sql: "UPDATE incidents SET resolved_at = ? WHERE resolved_at IS NULL AND started_at < ? AND monitor_id IN (SELECT value FROM json_each(?))",
-				params: [now, now, JSON.stringify(notDown)],
-			};
-		}
+		S.outbox[`r:${hour}`] = {
+			sql: `UPDATE incidents SET resolved_at = ? WHERE resolved_at IS NULL AND started_at < ?
+			 AND (monitor_id IN (SELECT value FROM json_each(?)) OR monitor_id NOT IN (SELECT id FROM monitors))`,
+			params: [now, now, JSON.stringify(notDown)],
+		};
 		S.bucket = {};
 		if (newDay) {
 			S.daily = {};

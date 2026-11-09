@@ -152,9 +152,12 @@ describe("Hub", () => {
 	it("closes incidents left open on a monitor that is up at the hourly roll", async () => {
 		await minute(3, true);
 		d1.sql.prepare("INSERT INTO incidents(id, monitor_id, started_at, cause) VALUES ('stale', 'hb', ?, 'HTTP 404')").run(T0);
+		// An incident whose monitor row was deleted straight from D1.
+		d1.sql.prepare("INSERT INTO incidents(id, monitor_id, started_at, cause) VALUES ('orphan', 'gone', ?, 'HTTP 404')").run(T0);
 		expect(incidents()[0].resolved_at).toBeNull();
 		await minute(60, true);
 		expect(incidents()[0].resolved_at).not.toBeNull();
+		expect(d1.sql.prepare("SELECT resolved_at FROM incidents WHERE id = 'orphan'").get()).not.toEqual({ resolved_at: null });
 	});
 
 	it("survives a restart from DO storage and flushes history hourly", async () => {
