@@ -27,6 +27,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { admin } from "@/api";
+import { CheckNowButton } from "./CheckNow";
 import { ChartCard, type Row, type Series, TimeChart } from "@/components/charts";
 import { Badge, StatusBadge, TagChip } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -103,12 +104,13 @@ export function SystemDetail({ id }: { id: string }) {
 	const canEdit = useCanEdit();
 	const { run, busy } = useAction();
 	const [range, setRange] = useLocalStorage<StatsRange>("richter-range", "1h");
-	const sys = useApi<SystemRecord>(`/api/admin/systems/${id}`, { refreshMs: 15_000 });
-	const refresh = range === "1h" ? 60_000 : 300_000;
+	const sys = useApi<SystemRecord>(`/api/admin/systems/${id}`, { refreshMs: 10_000 });
+	// Agents report once a minute: polling the 1h charts every 20 s shows each sample within ~20 s.
+	const refresh = range === "1h" ? 20_000 : 120_000;
 	const stats = useApi<StatsPoint[]>(`/api/admin/systems/${id}/stats?range=${range}`, { refreshMs: refresh });
 	const containers = useApi<ContainerPoint[]>(`/api/admin/systems/${id}/containers?range=${range}`, { refreshMs: refresh });
-	const pve = useApi<PveSnapshot | null>(`/api/admin/systems/${id}/pve`, { refreshMs: 60_000 });
-	const smart = useApi<SmartSnapshot>(`/api/admin/systems/${id}/smart`, { refreshMs: 300_000 });
+	const pve = useApi<PveSnapshot | null>(`/api/admin/systems/${id}/pve`, { refreshMs: 30_000 });
+	const smart = useApi<SmartSnapshot>(`/api/admin/systems/${id}/smart`, { refreshMs: 60_000 });
 	const [alertsOpen, setAlertsOpen] = useState(false);
 	const [install, setInstall] = useState<SystemInstall>();
 	const [editing, setEditing] = useState(false);
@@ -152,6 +154,7 @@ export function SystemDetail({ id }: { id: string }) {
 
 	const actions = s && canEdit && (
 		<div className="flex flex-wrap items-center gap-2">
+			<CheckNowButton system={s} onChecked={sys.setData} />
 			<Button variant="outline" size="sm" onClick={() => setAlertsOpen(true)}>
 				<Bell /> Alerts
 			</Button>

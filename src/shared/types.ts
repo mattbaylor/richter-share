@@ -355,6 +355,16 @@ export interface Incident {
 }
 
 export interface CheckNowResult { ok: boolean; status: MonitorStatus; latency_ms: number | null; message: string | null }
+/** POST /systems/:id/check-now: the refreshed system and what happened. */
+export interface SystemCheckNowResult {
+	system: SystemRecord;
+	/** The agent is connected and was asked for fresh data. */
+	connected: boolean;
+	/** Its reply arrived before the request returned. */
+	fresh: boolean;
+	monitors_checked: number;
+	message: string;
+}
 
 // ---- Notifications ----------------------------------------------------------
 

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { AccessSettings, Me, Role, CheckPoint, Incident, MonitorListItem, NotificationLogEntry, Overview, PackageSnapshot, PackageUpdate, ServicesSnapshot, SmartDevice, SmartSnapshot, StatsRange, SystemAlert, SystemdService, UptimeSummary } from "../../shared/types";
+import type { AccessSettings, Me, Role, CheckNowResult, CheckPoint, Incident, MonitorListItem, NotificationLogEntry, Overview, PackageSnapshot, PackageUpdate, ServicesSnapshot, SmartDevice, SmartSnapshot, StatsRange, SystemAlert, SystemCheckNowResult, SystemdService, UptimeSummary } from "../../shared/types";
 import { authenticate, type AccessIdentity } from "../access";
 import { getHubKey } from "../beszel/keys";
 import { EVENT_METRICS } from "../beszel/update-alerts";
@@ -65,7 +65,7 @@ admin.use("*", async (c, next) => {
 	if (path.startsWith("/access")) return;
 	// Any successful change may touch monitors, maintenances or a public page: let the Hub re-read
 	// its config and drop its page snapshots. An import replaces monitors wholesale, so reseed.
-	if (c.req.method !== "GET" && c.res.status < 400 && !/\/monitors\/(test|[^/]+\/check-now)$/.test(c.req.path)) {
+	if (c.req.method !== "GET" && c.res.status < 400 && !/\/(monitors\/test|(monitors|systems)\/[^/]+\/check-now)$/.test(c.req.path)) {
 		await hubReload(c.env, c.req.path.endsWith("/import") ? { reseed: true } : {});
 	}
 });
@@ -161,7 +161,14 @@ admin.post("/access/sync", async (c) => {
 admin.get("/overview", async (c) => {
 	const db = c.env.DB;
 	const sys = await db.prepare("SELECT status, COUNT(*) n FROM systems GROUP BY status").all<{ status: string; n: number }>();
-	const mon = await db.prepare("SELECT CASE WHEN paused = 1 THEN 'paused' ELSE status END s, COUNT(*) n FROM monitors WHERE type != 'group' GROUP BY s").all<{ s: string; n: number }>();
+	// Monitor status from the Hub's live state: D1's column only catches up when the Hub flushes.
+	const [rows, view] = await Promise.all([db.prepare("SELECT id, status, paused FROM monitors WHERE type != 'group'").all<{ id: string; status: string; paused: number }>(), hubView(c.env)]);
+	const byStatus = new Map<string, number>();
+	for (const r of rows.results) {
+		const st = r.paused ? "paused" : (view?.live[r.id]?.status ?? r.status);
+		byStatus.set(st, (byStatus.get(st) ?? 0) + 1);
+	}
+	const mon = { results: [...byStatus].map(([s, n]) => ({ s, n })) };
 	const open = await db.prepare("SELECT COUNT(*) n FROM incidents WHERE resolved_at IS NULL").first<{ n: number }>();
 	// id order == ts order (append-only), and uses the primary key instead of an index on ts.
 	const events = await db.prepare("SELECT * FROM events ORDER BY id DESC LIMIT 20").all();
@@ -330,6 +337,40 @@ admin.post("/systems/:id/:action{pause|resume|reset-fingerprint|rotate-token}", 
 		return c.json(installFor(c.env, token, (await getHubKey(db)).publicSsh));
 	}
 	return c.json(toSystem((await getSystemRow(c.env, id))!));
+});
+
+const CHECK_WAIT_MS = 8000; // how long "Check now" waits for the agent's reply
+
+/**
+ * "Check now" for a system: ask its agent for fresh data, wait briefly for the reply, then run the
+ * monitors tied to it (system, container and Proxmox guest monitors) as real checks.
+ */
+admin.post("/systems/:id/check-now", async (c) => {
+	const id = c.req.param("id");
+	const row = await must(getSystemRow(c.env, id), "System not found");
+	if (row.status === "paused") throw new HttpError(409, `${row.name} is paused: resume it to check it.`);
+	const agent = agentStub(c.env, id);
+	const { connected, requested_at } = await agent.refresh();
+	let fresh = false;
+	if (connected) {
+		for (const until = Date.now() + CHECK_WAIT_MS; Date.now() < until; ) {
+			await new Promise((r) => setTimeout(r, 400));
+			const l = await agent.live().catch(() => null);
+			if (l?.last_seen && l.last_seen >= requested_at) {
+				fresh = true;
+				break;
+			}
+		}
+	}
+	const mons = await c.env.DB.prepare("SELECT id FROM monitors WHERE paused = 0 AND json_extract(config, '$.system_id') = ?").bind(id).all<{ id: string }>();
+	const ids = mons.results.map((m) => m.id);
+	const { checked } = ids.length ? await hub(c.env).checkNow(ids) : { checked: 0 };
+	const message = !connected
+		? `The agent on ${row.name} isn't connected${checked ? `; re-checked ${checked} monitor${checked === 1 ? "" : "s"}` : ""}.`
+		: fresh
+			? `Fresh data from ${row.name}${checked ? `, ${checked} monitor${checked === 1 ? "" : "s"} re-checked` : ""}.`
+			: `Asked ${row.name} for data but it hasn't answered yet; the page updates when it does.`;
+	return c.json({ system: toSystem((await getSystemRow(c.env, id))!), connected, fresh, monitors_checked: checked, message } satisfies SystemCheckNowResult);
 });
 
 const RANGE: Record<StatsRange, [string, number]> = {
@@ -732,6 +773,13 @@ admin.post("/monitors/:id/:action{pause|resume|clone|check-now}", async (c) => {
 			return c.json(await loadMonitor(c.env, nid), 201);
 		}
 		default: {
+			// A real check: the result lands in the monitor's live state (status, history, incidents),
+			// so the dashboard shows it right away. Paused monitors get a dry run that records nothing.
+			if (!row.paused && row.type !== "group") {
+				const { checked, live } = await hub(c.env).checkNow([id]);
+				const l = live[id];
+				if (checked && l) return c.json({ ok: l.status !== "down", status: l.status, latency_ms: l.last_latency_ms, message: l.last_message } satisfies CheckNowResult);
+			}
 			const st = await hub(c.env).monitorState(id).catch(() => null);
 			const live = overlay(row, st?.live ?? undefined);
 			const raw = await runCheck(c.env, live);

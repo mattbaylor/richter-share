@@ -13,6 +13,7 @@ import type {
 	SystemdService,
 	Announcement,
 	CheckNowResult,
+	SystemCheckNowResult,
 	CheckPoint,
 	ContainerPoint,
 	ContainerStat,
@@ -597,6 +598,11 @@ on("POST", `${A}/systems/:id/pause`, (m) => Object.assign(find(systems, m[1]), {
 on("POST", `${A}/systems/:id/resume`, (m) => Object.assign(find(systems, m[1]), { status: "up" }));
 on("POST", `${A}/systems/:id/reset-fingerprint`, (m) => Object.assign(find(systems, m[1]), { fingerprint_bound: false }));
 on("POST", `${A}/systems/:id/rotate-token`, (m) => install(find(systems, m[1])));
+on("POST", `${A}/systems/:id/check-now`, (m): SystemCheckNowResult => {
+	const sys = Object.assign(find(systems, m[1]), { last_seen: now() });
+	const up = sys.status === "up";
+	return { system: sys, connected: up, fresh: up, monitors_checked: up ? 1 : 0, message: up ? `Fresh data from ${sys.name}, 1 monitor re-checked.` : `The agent on ${sys.name} isn't connected.` };
+});
 on("GET", `${A}/systems/:id/stats`, (m, _, q) => statsFor(find(systems, m[1]).id, (q.get("range") ?? "1h") as StatsRange));
 on("GET", `${A}/systems/:id/containers`, (m, _, q) => containersFor(find(systems, m[1]).id, (q.get("range") ?? "1h") as StatsRange));
 const alertsOf = (id: string) => (alerts[id] ??= { alerts: [{ metric: "Status", threshold: null, minutes: 1 }], notification_ids: [notifications[0].id] });

@@ -1,5 +1,5 @@
 import type { HostInfo, Me, Overview } from "@shared/types";
-import { Eye, LogOut, Moon, Search, ShieldX, Sun } from "lucide-react";
+import { Eye, LogOut, Moon, RefreshCw, Search, ShieldX, Sun, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Redirect, Route, Switch, useLocation } from "wouter";
 import { Logo } from "@/components/logo";
@@ -7,7 +7,8 @@ import { ConfirmProvider } from "@/components/ui/confirm";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ToastProvider } from "@/components/ui/toast";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
-import { useApi, useDocumentTitle } from "@/lib/hooks";
+import { refreshAll, useApi, useDocumentTitle, useLiveState, useNow } from "@/lib/hooks";
+import { timeAgo } from "@/lib/format";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { CommandPalette } from "./CommandPalette";
@@ -33,11 +34,61 @@ function overallOf(o: Overview | undefined): { cls: string; label: string } {
 	return { cls: "bg-emerald-500", label: "Everything is up" };
 }
 
+/** Refreshes failing for this long: the page is showing old data, say so. */
+const STALE_AFTER_MS = 45_000;
+
+/** "Updated 8s ago" in the header; click to refresh everything on screen now. */
+function LiveIndicator() {
+	const live = useLiveState();
+	const now = useNow(1000);
+	const [spin, setSpin] = useState(false);
+	const stale = live.failingSince != null && now - live.failingSince > STALE_AFTER_MS;
+	return (
+		<Tooltip content={stale ? "Refreshes are failing: click to retry" : "The page refreshes itself. Click to refresh now."} side="bottom">
+			<button
+				type="button"
+				onClick={() => {
+					setSpin(true);
+					setTimeout(() => setSpin(false), 800);
+					refreshAll();
+				}}
+				className={cn(
+					"hidden h-8 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs tabular-nums hover:bg-accent sm:flex",
+					stale ? "text-red-600 dark:text-red-400" : "text-muted-foreground hover:text-foreground",
+				)}
+			>
+				{stale ? <WifiOff className="size-3.5" /> : <RefreshCw className={cn("size-3.5", spin && "animate-spin")} />}
+				{live.okAt == null ? "Loading…" : `Updated ${timeAgo(live.okAt, now)}`}
+			</button>
+		</Tooltip>
+	);
+}
+
+/** Shown when refreshes keep failing, so old numbers are never mistaken for current ones. */
+function StaleBanner() {
+	const live = useLiveState();
+	const now = useNow(5000);
+	if (live.failingSince == null || now - live.failingSince < STALE_AFTER_MS) return null;
+	return (
+		<div className="border-b border-red-500/30 bg-red-500/10 text-sm text-red-700 dark:text-red-300">
+			<div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 sm:px-6">
+				<WifiOff className="size-4 shrink-0" />
+				<span>
+					Can't reach Richter{live.okAt != null ? `, so this page is showing data from ${timeAgo(live.okAt, now)}` : ""}. Your sign-in may have expired.
+				</span>
+				<button type="button" onClick={() => window.location.reload()} className="font-medium underline underline-offset-2">
+					Reload the page
+				</button>
+			</div>
+		</div>
+	);
+}
+
 function Header({ onSearch }: { onSearch: () => void }) {
 	const [location] = useLocation();
 	const { theme, toggle } = useTheme();
 	const me = { data: useMe() };
-	const overview = useApi<Overview>("/api/admin/overview", { refreshMs: 60_000 });
+	const overview = useApi<Overview>("/api/admin/overview", { refreshMs: 15_000 });
 	const overall = overallOf(overview.data);
 	const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -80,6 +131,7 @@ function Header({ onSearch }: { onSearch: () => void }) {
 					})}
 				</nav>
 				<div className="ml-auto flex items-center gap-1.5">
+					<LiveIndicator />
 					<button
 						type="button"
 						onClick={onSearch}
@@ -200,6 +252,7 @@ export default function DashboardApp({ host }: { host: HostInfo }) {
 					<ConfirmProvider>
 						<div className="min-h-dvh">
 							<Header onSearch={() => setPaletteOpen(true)} />
+							<StaleBanner />
 							<main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
 								<Switch>
 									<Route path="/">

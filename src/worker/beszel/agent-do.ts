@@ -595,6 +595,22 @@ export class AgentConnection extends DurableObject<Env> {
 		return last && now - last[0] < 3 * 60_000 && Number.isFinite(last[1]?.cpu) ? last[1].cpu : null;
 	}
 
+	/**
+	 * "Check now" from the dashboard: ask the connected agent for fresh data (with details) right away
+	 * and re-read S.M.A.R.T. and the package list along with it. The reply arrives as a message and
+	 * goes through the normal path (stats, alerts); callers watch live().last_seen to see it land.
+	 */
+	async refresh(): Promise<{ connected: boolean; requested_at: number }> {
+		const now = Date.now();
+		const ws = this.openSockets()[0];
+		const att = ws?.deserializeAttachment() as Attachment | undefined;
+		if (!ws || !att?.verified) return { connected: false, requested_at: now };
+		att.smartAt = 0; // smartTick asks again with this reply
+		await this.ctx.storage.delete("pkgFetchedAt"); // packagesTick re-fetches the list with this reply
+		this.request(ws, att, true);
+		return { connected: true, requested_at: now };
+	}
+
 	/** Stats records for the dashboard charts (same shape the D1 tables had). */
 	async stats(kind: Kind, type: string, since: number): Promise<{ created_at: number; stats: unknown }[]> {
 		if (type === "1m") {

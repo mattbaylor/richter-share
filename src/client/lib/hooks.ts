@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { request } from "@/api";
+import { ApiError, request } from "@/api";
 
 /** Run `fn` every `ms` while the tab is visible (and once when it becomes visible again). */
 export function usePoll(fn: () => void, ms: number | null | undefined) {
@@ -17,6 +17,48 @@ export function usePoll(fn: () => void, ms: number | null | undefined) {
 			document.removeEventListener("visibilitychange", onVis);
 		};
 	}, [ms]);
+}
+
+/**
+ * Dashboard-wide freshness: every useApi load reports here, so the header can say how fresh the
+ * page is, and warn when refreshes keep failing (e.g. the Cloudflare Access sign-in expired) instead
+ * of silently showing old numbers.
+ */
+export interface LiveState {
+	/** Last successful load. */
+	okAt: number | null;
+	/** First failure since the last success, or null while loads succeed. */
+	failingSince: number | null;
+	error: Error | null;
+}
+let live: LiveState = { okAt: null, failingSince: null, error: null };
+const liveSubs = new Set<() => void>();
+function setLive(next: LiveState) {
+	live = next;
+	liveSubs.forEach((f) => f());
+}
+function liveOk() {
+	setLive({ okAt: Date.now(), failingSince: null, error: null });
+}
+function liveFail(e: Error) {
+	setLive({ ...live, failingSince: live.failingSince ?? Date.now(), error: e });
+}
+export function useLiveState(): LiveState {
+	const [, force] = useState(0);
+	useEffect(() => {
+		const f = () => force((n) => n + 1);
+		liveSubs.add(f);
+		return () => {
+			liveSubs.delete(f);
+		};
+	}, []);
+	return live;
+}
+
+const REFRESH_EVENT = "richter:refresh";
+/** Reload everything on screen now (after "Check now", or from the header's refresh control). */
+export function refreshAll() {
+	window.dispatchEvent(new Event(REFRESH_EVENT));
 }
 
 export interface ApiState<T> {
@@ -48,9 +90,13 @@ export function useApi<T>(path: string | null, opts: { refreshMs?: number } = {}
 			if (mine !== seq.current) return;
 			setData(d);
 			setError(undefined);
+			liveOk();
 		} catch (e) {
 			if (mine !== seq.current) return;
-			setError(e instanceof Error ? e : new Error(String(e)));
+			const err = e instanceof Error ? e : new Error(String(e));
+			setError(err);
+			// Connection-level failures only: a 404 or a validation error says nothing about freshness.
+			if (!(err instanceof ApiError) || err.status === 401 || err.status >= 500 || err.message === "Invalid JSON from server") liveFail(err);
 		} finally {
 			if (mine === seq.current) setLoading(false);
 		}
@@ -64,6 +110,12 @@ export function useApi<T>(path: string | null, opts: { refreshMs?: number } = {}
 	}, [path, load]);
 
 	usePoll(() => void load(), path == null ? null : opts.refreshMs);
+	useEffect(() => {
+		if (path == null) return;
+		const f = () => void load();
+		window.addEventListener(REFRESH_EVENT, f);
+		return () => window.removeEventListener(REFRESH_EVENT, f);
+	}, [path, load]);
 
 	return { data, error, loading, reload: load, setData };
 }

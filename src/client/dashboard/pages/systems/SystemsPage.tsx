@@ -15,6 +15,7 @@ import { Segmented } from "@/components/ui/tabs";
 import { Tooltip } from "@/components/ui/tooltip";
 import { formatDuration, formatNumber, formatRate, timeAgo } from "@/lib/format";
 import { useApi, useDocumentTitle, useLocalStorage } from "@/lib/hooks";
+import { CheckNowButton } from "./CheckNow";
 import { STATUS_LABEL } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { AddSystemDialog } from "./AddSystemDialog";
@@ -124,7 +125,9 @@ function UpdatesCell({ system: s, live }: { system: SystemRecord; live: boolean 
 export function SystemsPage() {
 	useDocumentTitle("Systems · Richter");
 	const canEdit = useCanEdit();
-	const { data, error, loading, reload } = useApi<SystemRecord[]>("/api/admin/systems", { refreshMs: 15_000 });
+	const { data, error, loading, reload, setData } = useApi<SystemRecord[]>("/api/admin/systems", { refreshMs: 15_000 });
+	// A row's "Check now" result: swap in the fresh record (keeping the list-only `kind`).
+	const patch = (r: SystemRecord) => setData((xs) => xs?.map((x) => (x.id === r.id ? { ...x, ...r, kind: x.kind } : x)));
 	const [, navigate] = useLocation();
 	const [query, setQuery] = useState("");
 	const [tags, setTags] = useState<string[]>([]);
@@ -327,6 +330,11 @@ export function SystemsPage() {
 														<TagChip key={t} tag={t} />
 													))}
 												</span>
+												{canEdit && (
+													<span className="ml-auto">
+														<CheckNowButton system={s} compact onChecked={patch} />
+													</span>
+												)}
 											</div>
 										</Td>
 										{visible.map((c, i) => (
@@ -343,7 +351,7 @@ export function SystemsPage() {
 			) : data ? (
 				<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
 					{rows.map((s) => (
-						<SystemCard key={s.id} system={s} shade={shade} />
+						<SystemCard key={s.id} system={s} shade={shade} onChecked={patch} />
 					))}
 				</div>
 			) : null}
@@ -353,8 +361,9 @@ export function SystemsPage() {
 	);
 }
 
-function SystemCard({ system: s, shade }: { system: SystemRecord; shade: boolean }) {
+function SystemCard({ system: s, shade, onChecked }: { system: SystemRecord; shade: boolean; onChecked: (s: SystemRecord) => void }) {
 	const live = isLive(s);
+	const canEdit = useCanEdit();
 	const row = (label: string, value: React.ReactNode) => (
 		<div className="flex items-center justify-between gap-3 text-sm">
 			<span className="w-16 shrink-0 text-xs text-muted-foreground">{label}</span>
@@ -369,6 +378,7 @@ function SystemCard({ system: s, shade }: { system: SystemRecord; shade: boolean
 					<span className="truncate font-semibold">{s.name}</span>
 					{s.kind && <span className="rounded border px-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{KIND[s.kind].label}</span>}
 					<span className="ml-auto text-xs text-muted-foreground">{live ? formatDuration(s.info?.u) : STATUS_LABEL[s.status]}</span>
+					{canEdit && <CheckNowButton system={s} compact onChecked={onChecked} />}
 				</div>
 				<div className={cn("space-y-2", !live && "opacity-40")}>
 					{row("CPU", <Meter value={s.info?.cpu} />)}
