@@ -135,6 +135,11 @@ CREATE TABLE IF NOT EXISTS users (
 	`
 ALTER TABLE status_pages ADD COLUMN show_mobile_sparklines INTEGER NOT NULL DEFAULT 1
 `,
+	// Latest-only S.M.A.R.T. snapshot per system (Beszel GetSmartData, about hourly); rewritten only when it changes.
+	`
+CREATE TABLE IF NOT EXISTS system_smart (system_id TEXT PRIMARY KEY, devices TEXT NOT NULL DEFAULT '[]', hash TEXT,
+  updated_at INTEGER NOT NULL, checked_at INTEGER)
+`,
 ];
 
 let migratedIsolate = false;

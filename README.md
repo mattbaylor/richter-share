@@ -81,6 +81,8 @@ Richter then creates a **Proxmox guest** monitor for every guest, under a "<syst
 - **VM:** Down when stopped while set to start on boot; Degraded on memory. Disk usage is only checked when the QEMU guest agent is running, because Proxmox reports 0 without it.
 - Guests that aren't set to start on boot are created paused. Templates are skipped. A guest that disappears keeps its monitor, which goes Down ("no longer on <node>"). Renames and threshold edits you make in the dashboard are kept.
 
+The same command gives the host's agent read access to the disks (capabilities, the `disk` group and an NVMe udev rule), so the system page shows **Disk health** from S.M.A.R.T. and the **Disk health (S.M.A.R.T.)** alert can fire when a disk reports FAILED or WARNING. On VMs, the **CPU steal** alert notices an overcommitted host.
+
 Rotating the system's token also stops the companion: re-run the install command afterwards. Remove the companion with `richter-pve uninstall`. Why this is a companion script and not a forked agent is explained in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Heartbeats

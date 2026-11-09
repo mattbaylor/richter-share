@@ -1,5 +1,5 @@
 import { decode, encode } from "cborg";
-import type { ContainerStat, PackageUpdate, ServiceState, SystemDetails, SystemdService, SystemInfo, SystemStats } from "../../shared/types";
+import type { ContainerStat, PackageUpdate, ServiceState, SmartDevice, SystemDetails, SystemdService, SystemInfo, SystemStats } from "../../shared/types";
 
 /** Beszel WebSocket actions (internal/common/common-ws.go). */
 export const Action = {
@@ -29,6 +29,10 @@ export function fingerprintRequest(signature: Uint8Array, id: number): Uint8Arra
 
 export function packageUpdatesRequest(id: number): Uint8Array {
 	return encodeRequest(Action.GetPackageUpdates, undefined, id);
+}
+
+export function smartDataRequest(id: number): Uint8Array {
+	return encodeRequest(Action.GetSmartData, undefined, id);
 }
 
 export function getDataRequest(id: number, includeDetails: boolean, cacheTimeMs = 60000): Uint8Array {
@@ -317,4 +321,63 @@ export function normalizePackageUpdates(v: unknown): NormalizedPackages | null {
 	packages.sort((a, b) => Number(!!b.s) - Number(!!a.s) || a.n.localeCompare(b.n));
 	const checked = num(m.get(1));
 	return { manager: str(m.get(0)) ?? null, checkedAt: checked ? checked * 1000 : null, securityKnown: m.get(2) === true, packages };
+}
+
+// ---------------------------------------------------------------- S.M.A.R.T.
+
+/** Attribute names whose raw value means trouble when non-zero (ATA ids 5, 187, 188, 197, 198; NVMe media errors). */
+const BAD_RAW = /^(reallocated_sector_ct|reported_uncorrect|command_timeout|current_pending_sector|offline_uncorrectable|media_errors|mediaerrors|critical_warning|criticalwarning)$/i;
+
+/**
+ * Normalize a GetSmartData reply: SmartDataResponse{0: {key: SmartData}, 1: complete} (current agents) or a bare
+ * {key: SmartData} map (older ones). SmartData keys: 1 model, 2 serial, 3 firmware, 4 capacity, 5 status,
+ * 6 disk name, 7 type, 8 temp, 9 attributes [{0 id, 1 name, 2 value, 3 worst, 4 threshold, 5 raw, 6 raw string, 7 when failed}].
+ */
+export function normalizeSmart(payload: unknown): { devices: SmartDevice[]; complete: boolean } {
+	const top = asMap(payload);
+	if (!top) return { devices: [], complete: false };
+	const wrapped = asMap(top.get(0));
+	const data = wrapped ?? top;
+	const complete = wrapped ? top.get(1) === true : false;
+	const devices: SmartDevice[] = [];
+	for (const [k, v] of data) {
+		const d = asMap(v);
+		if (typeof k !== "string" || !d) continue;
+		let hours: number | undefined;
+		let cycles: number | undefined;
+		const flags: NonNullable<SmartDevice["flags"]> = [];
+		const attrs = Array.isArray(d.get(9)) ? (d.get(9) as unknown[]) : [];
+		for (const a of attrs) {
+			const am = asMap(a);
+			if (!am) continue;
+			const name = str(am.get(1)) ?? "";
+			const lower = name.toLowerCase();
+			const raw = num(am.get(5));
+			if (hours == null && (lower.includes("poweronhours") || lower.includes("power_on_hours"))) hours = raw;
+			if (cycles == null && ((lower.includes("power") && lower.includes("cycle")) || lower.includes("startstopcycles"))) cycles = raw;
+			const whenFailed = str(am.get(7));
+			const value = num(am.get(2));
+			const threshold = num(am.get(4));
+			const pastThreshold = threshold > 0 && value > 0 && value <= threshold;
+			if (whenFailed || pastThreshold || (BAD_RAW.test(name) && raw > 0)) {
+				flags.push({ id: num(am.get(0)) || undefined, name, value: value || undefined, threshold: threshold || undefined, raw, when_failed: whenFailed });
+			}
+		}
+		devices.push({
+			key: k,
+			name: str(d.get(6)) || k,
+			model: str(d.get(1)),
+			serial: str(d.get(2)),
+			firmware: str(d.get(3)),
+			type: str(d.get(7)),
+			capacity: num(d.get(4)) || undefined,
+			status: (str(d.get(5)) ?? "UNKNOWN").toUpperCase(),
+			temp: num(d.get(8)) || undefined,
+			hours,
+			cycles,
+			...(flags.length ? { flags } : {}),
+		});
+	}
+	devices.sort((a, b) => a.name.localeCompare(b.name));
+	return { devices, complete };
 }

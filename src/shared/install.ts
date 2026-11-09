@@ -17,6 +17,24 @@ if { printf 'Enable automatic daily agent updates? [Y/n] ' >/dev/tty; } 2>/dev/n
 fi
 case "$ans" in [Nn]*) au=false ;; *) au=true ;; esac`;
 
+/**
+ * Root shell lines giving a systemd beszel-agent smartctl access to the disks (idempotent): smartctl
+ * (already part of every Proxmox VE install), CAP_SYS_RAWIO for SATA, CAP_SYS_ADMIN for NVMe, the disk
+ * group for block devices, and a udev rule so NVMe character devices are group-readable too.
+ */
+export const SMART_SETUP = `command -v smartctl >/dev/null || apt-get install -y smartmontools
+mkdir -p /etc/systemd/system/beszel-agent.service.d
+cat > /etc/systemd/system/beszel-agent.service.d/smart.conf <<'SMART'
+[Service]
+AmbientCapabilities=CAP_SYS_RAWIO CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN
+SupplementaryGroups=disk
+SMART
+echo 'KERNEL=="nvme[0-9]*", GROUP="disk", MODE="0660"' > /etc/udev/rules.d/99-smartctl-disk-group.rules
+udevadm control --reload-rules && udevadm trigger --subsystem-match=nvme
+systemctl daemon-reload
+systemctl restart beszel-agent`;
+
 export function buildInstall(hub: string, token: string, key: string): SystemInstall {
 	const compose = `services:
   beszel-agent:
@@ -127,7 +145,9 @@ RICHTER`;
 	// Proxmox VE node, as root (PVE has no sudo by default): the Linux agent for the host itself,
 	// then the richter-pve companion, which pushes the node's LXC containers and VMs every minute
 	// so Richter can create a monitor per guest. Both are safe to re-run.
+	// On a hypervisor the agent also gets S.M.A.R.T. access (beszel.dev/guide/smart-data).
 	const proxmox = `${binary.replace(/sudo /g, "").replace(/\)$/, "")}
+${SMART_SETUP}
 curl -fsSL ${hub}/pve/richter-pve.sh -o /tmp/richter-pve.sh
 bash /tmp/richter-pve.sh install "${hub}" "${token}"
 rm -f /tmp/richter-pve.sh)`;

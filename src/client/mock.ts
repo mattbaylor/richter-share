@@ -8,6 +8,7 @@ import type {
 	NotificationLogEntry,
 	PackageSnapshot,
 	PveSnapshot,
+	SmartSnapshot,
 	ServicesSnapshot,
 	SystemdService,
 	Announcement,
@@ -617,6 +618,19 @@ on("GET", `${A}/systems/:id/packages`, (m): PackageSnapshot => {
 					{ n: "sosreport", c: "4.10.2-0ubuntu0~24.04.1", a: "4.10.3-0ubuntu0~24.04.1" },
 				]
 			: [],
+	};
+});
+on("GET", `${A}/systems/:id/smart`, (m): SmartSnapshot => {
+	if (find(systems, m[1]).id !== systems[4].id) return { devices: [], updated_at: null, checked_at: null };
+	const T = 1000 ** 4;
+	return {
+		updated_at: now() - 26 * HOUR,
+		checked_at: now() - 14 * MIN,
+		devices: [
+			{ key: "/dev/nvme0", name: "nvme0", model: "Samsung SSD 980 PRO 1TB", serial: "S5GXNF0R123456", type: "nvme", capacity: 1 * T, status: "PASSED", temp: 41, hours: 21_904, cycles: 88 },
+			{ key: "/dev/sda", name: "sda", model: "WDC WD80EFZZ-68BTXN0", type: "sat", capacity: 8 * T, status: "PASSED", temp: 34, hours: 31_200, cycles: 41 },
+			{ key: "/dev/sdb", name: "sdb", model: "WDC WD80EFZZ-68BTXN0", type: "sat", capacity: 8 * T, status: "WARNING", temp: 36, hours: 31_198, cycles: 41, flags: [{ id: 5, name: "Reallocated_Sector_Ct", value: 98, threshold: 5, raw: 24 }] },
+		],
 	};
 });
 on("GET", `${A}/systems/:id/pve`, (m): PveSnapshot | null => {

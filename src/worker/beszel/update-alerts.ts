@@ -10,7 +10,7 @@ import { type NotifyMessage, notify } from "../notify";
  */
 
 export const UPDATE_METRICS = ["SecurityUpdates", "PackageUpdates"] as const;
-export const EVENT_METRICS = ["Status", "SecurityUpdates", "PackageUpdates", "SystemdFailed"] as const;
+export const EVENT_METRICS = ["Status", "SecurityUpdates", "PackageUpdates", "SystemdFailed", "SmartFailed"] as const;
 const MAX_LISTED = 10;
 
 export interface AlertRow {

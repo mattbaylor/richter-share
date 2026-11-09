@@ -128,7 +128,8 @@ describe("AgentConnection storage", () => {
 		expect(t.stats.alarms).toBe(1);
 		expect(t.alarmAt()).toBe(start + WATCHDOG_MS);
 		expect(t.stats.rowsWritten).toBeLessThan(30);
-		expect(t.ws.sent).toBe(120);
+		// 120 data requests plus an hourly GetSmartData (at 0 and 60 minutes).
+		expect(t.ws.sent).toBe(122);
 
 		// Charts see persisted + buffered samples, same shape as before.
 		const now = Date.now();

@@ -38,6 +38,7 @@ Public SPA routes: `/` (the default page or the custom-domain page), `/s/:slug`.
 | GET | `/systems/:id/stats?range=1h\|12h\|24h\|1w\|30d` | | `StatsPoint[]` (oldest first) |
 | GET | `/systems/:id/containers?range=…` | | `ContainerPoint[]` (oldest first) |
 | GET | `/systems/:id/pve` | | `PveSnapshot \| null` (latest richter-pve push) |
+| GET | `/systems/:id/smart` | | `SmartSnapshot` (disks from the agent's S.M.A.R.T. data, about hourly) |
 | GET | `/systems/:id/alerts` | | `{ alerts: SystemAlert[], notification_ids: string[] }` |
 | PUT | `/systems/:id/alerts` | `{ alerts: SystemAlert[], notification_ids: string[] }` | same |
 | GET | `/monitors` | | `MonitorListItem[]` |

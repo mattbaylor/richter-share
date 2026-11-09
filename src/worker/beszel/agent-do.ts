@@ -6,7 +6,8 @@ import { getHubKey, signToken } from "./keys";
 import { RETENTION_1M, rollupContainers, rollupStats, TIERS } from "./rollup";
 import type { ContainerStat, PackageUpdate, PveSnapshot, SystemdService, SystemInfo, SystemStats } from "../../shared/types";
 import { discoverGuests, guestKey } from "./pve";
-import { dashboardTemp, decodeResponse, fingerprintRequest, getDataRequest, type NormalizedPackages, normalizeCombinedData, normalizePackageUpdates, packageUpdatesRequest } from "./protocol";
+import { dashboardTemp, decodeResponse, fingerprintRequest, getDataRequest, type NormalizedPackages, normalizeCombinedData, normalizePackageUpdates, normalizeSmart, packageUpdatesRequest, smartDataRequest } from "./protocol";
+import { evaluateSmartAlerts, SMART_REFRESH_MS, SMART_REPLY_MS, smartUpsert } from "./smart";
 import { type AlertRow, evaluatePackageAlerts, evaluateSystemdAlerts, hash, UPDATE_METRICS } from "./update-alerts";
 
 /**
@@ -87,6 +88,9 @@ interface Attachment {
 	due?: number;
 	/** When info.dt was last really observed (agent or sensors), for dashboardTemp's carry-over. */
 	dtAt?: number;
+	/** Outstanding GetSmartData request, and when this connection last asked (no storage writes). */
+	smartReq?: { id: number; at: number } | null;
+	smartAt?: number;
 }
 
 interface SystemRow {
@@ -405,6 +409,10 @@ export class AgentConnection extends DurableObject<Env> {
 		}
 		if (res.error) {
 			console.warn(`agent ${att.systemId} error: ${res.error}`);
+			if (att.smartReq && res.id === att.smartReq.id) {
+				att.smartReq = null;
+				ws.serializeAttachment(att);
+			}
 			const pending = await this.ctx.storage.get<PendingPackages>("pkgReq");
 			if (pending && res.id === pending.id) await this.ctx.storage.delete("pkgReq");
 			return;
@@ -416,6 +424,12 @@ export class AgentConnection extends DurableObject<Env> {
 			return;
 		}
 
+		if (att.smartReq && res.id === att.smartReq.id) {
+			att.smartReq = null;
+			ws.serializeAttachment(att);
+			await this.handleSmart(att, res.payload);
+			return;
+		}
 		const pending = await this.ctx.storage.get<PendingPackages>("pkgReq");
 		if (pending && res.id === pending.id) {
 			await this.handlePackages(att, res.payload);
@@ -505,6 +519,37 @@ export class AgentConnection extends DurableObject<Env> {
 		await evaluateSystemAlerts(this.env, att.systemId, name, alerts, (since) => this.series1m(att, since));
 		if (n.services) await evaluateSystemdAlerts(this.env, att.systemId, name, n.services, alerts);
 		if (n.info.pu?.length) await this.packagesTick(ws, att.systemId, name, n.info.pu, alerts);
+		this.smartTick(ws, att, now);
+	}
+
+	/**
+	 * Ask for S.M.A.R.T. data once per connection and then hourly (Beszel's default SMART_INTERVAL),
+	 * tracked in the socket attachment. Agents without smartctl access just reply with no disks.
+	 */
+	private smartTick(ws: WebSocket, att: Attachment, now: number): void {
+		const live = att.smartReq && now - att.smartReq.at < SMART_REPLY_MS;
+		if (live || (att.smartAt && now - att.smartAt < SMART_REFRESH_MS)) return;
+		const id = this.nextId();
+		att.smartReq = { id, at: now };
+		att.smartAt = now;
+		ws.send(smartDataRequest(id));
+		ws.serializeAttachment(att);
+	}
+
+	private async handleSmart(att: Attachment, payload: unknown): Promise<void> {
+		const { devices } = normalizeSmart(payload);
+		const now = Date.now();
+		const db = this.env.DB;
+		// A system that never reported disks gets no row (keeps the Disks section hidden).
+		const prev = await db.prepare("SELECT 1 FROM system_smart WHERE system_id = ?").bind(att.systemId).first();
+		if (!devices.length && !prev) return;
+		const [, sys, alerts] = await db.batch([
+			smartUpsert(this.env, att.systemId, devices, now),
+			db.prepare("SELECT name FROM systems WHERE id = ?").bind(att.systemId),
+			db.prepare("SELECT * FROM system_alerts WHERE system_id = ? AND metric = 'SmartFailed'").bind(att.systemId),
+		]);
+		const name = (sys.results[0] as { name: string } | undefined)?.name;
+		if (name) await evaluateSmartAlerts(this.env, att.systemId, name, devices, alerts.results as AlertRow[]);
 	}
 
 	/** 1m system stats since `since`: the buffer, plus "hot" only when the buffer doesn't reach back far enough. */

@@ -139,7 +139,31 @@ export type SystemAlertMetric =
 	| "GPU"
 	| "SecurityUpdates"
 	| "PackageUpdates"
-	| "SystemdFailed";
+	| "SystemdFailed"
+	| "SmartFailed"
+	| "Steal";
+
+/** One disk from Beszel's GetSmartData (smartctl), trimmed for storage. */
+export interface SmartDevice {
+	key: string; // agent's device key, e.g. /dev/sda
+	name: string; // disk name (falls back to key)
+	model?: string;
+	serial?: string;
+	firmware?: string;
+	type?: string; // sat, nvme, scsi, emmc, ...
+	capacity?: number; // bytes
+	status: string; // PASSED | FAILED | WARNING | UNKNOWN (as reported)
+	temp?: number; // °C
+	hours?: number; // power-on hours
+	cycles?: number; // power cycles
+	/** Attributes past their threshold now or in the past (smartctl "when_failed"), or raw counters worth showing. */
+	flags?: { id?: number; name: string; value?: number; threshold?: number; raw?: number; when_failed?: string }[];
+}
+export interface SmartSnapshot {
+	devices: SmartDevice[];
+	updated_at: number | null; // ms, last stored change
+	checked_at: number | null; // ms, last reply from the agent
+}
 
 /** One pending package update (Beszel GetPackageUpdates). */
 export interface PackageUpdate {

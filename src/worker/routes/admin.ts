@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import type { AccessSettings, Me, Role, CheckPoint, Incident, MonitorListItem, NotificationLogEntry, Overview, PackageSnapshot, PackageUpdate, ServicesSnapshot, StatsRange, SystemAlert, SystemdService, UptimeSummary } from "../../shared/types";
+import type { AccessSettings, Me, Role, CheckPoint, Incident, MonitorListItem, NotificationLogEntry, Overview, PackageSnapshot, PackageUpdate, ServicesSnapshot, SmartDevice, SmartSnapshot, StatsRange, SystemAlert, SystemdService, UptimeSummary } from "../../shared/types";
 import { authenticate, type AccessIdentity } from "../access";
 import { getHubKey } from "../beszel/keys";
 import { EVENT_METRICS } from "../beszel/update-alerts";
@@ -257,7 +257,7 @@ admin.delete("/systems/:id", async (c) => {
 	await closeAgent(c.env, id, "system deleted");
 	await agentStub(c.env, id).purge();
 	await c.env.DB.batch(
-		["systems WHERE id", "system_stats WHERE system_id", "container_stats WHERE system_id", "system_alerts WHERE system_id", "system_notifications WHERE system_id", "system_packages WHERE system_id", "system_services WHERE system_id"].map((t) =>
+		["systems WHERE id", "system_stats WHERE system_id", "container_stats WHERE system_id", "system_alerts WHERE system_id", "system_notifications WHERE system_id", "system_packages WHERE system_id", "system_services WHERE system_id", "system_smart WHERE system_id"].map((t) =>
 			c.env.DB.prepare(`DELETE FROM ${t} = ?`).bind(id),
 		),
 	);
@@ -312,6 +312,13 @@ admin.get("/systems/:id/pve", async (c) => {
 	return c.json(await latestPve(c.env, c.req.param("id")));
 });
 
+admin.get("/systems/:id/smart", async (c) => {
+	const r = await c.env.DB.prepare("SELECT devices, updated_at, checked_at FROM system_smart WHERE system_id = ?")
+		.bind(c.req.param("id"))
+		.first<{ devices: string; updated_at: number; checked_at: number | null }>();
+	return c.json({ devices: parseJson<SmartDevice[]>(r?.devices, []), updated_at: r?.updated_at ?? null, checked_at: r?.checked_at ?? null } satisfies SmartSnapshot);
+});
+
 admin.get("/systems/:id/packages", async (c) => {
 	const r = await c.env.DB.prepare("SELECT manager, checked_at, security_known, packages, updated_at FROM system_packages WHERE system_id = ?")
 		.bind(c.req.param("id"))
@@ -345,7 +352,8 @@ async function alertsOf(env: Env, id: string) {
 		notification_ids: n.results.map((r) => r.notification_id),
 	};
 }
-const alertMetric = z.enum(["Status", "CPU", "Memory", "Disk", "Temperature", "LoadAvg5", "Bandwidth", "GPU", "SecurityUpdates", "PackageUpdates", "SystemdFailed"]);
+const NO_THRESHOLD = new Set(["Status", "SystemdFailed", "SmartFailed"]);
+const alertMetric = z.enum(["Status", "CPU", "Memory", "Disk", "Temperature", "LoadAvg5", "Bandwidth", "GPU", "Steal", "SecurityUpdates", "PackageUpdates", "SystemdFailed", "SmartFailed"]);
 const alertInput = z.object({ metric: alertMetric, threshold: z.number().nullable(), minutes: z.number().int().min(1).max(60) });
 
 admin.get("/systems/:id/alerts", async (c) => c.json(await alertsOf(c.env, c.req.param("id"))));
@@ -365,7 +373,7 @@ admin.post("/alerts/bulk", async (c) => {
 	);
 	const only = body.system_ids ? new Set(body.system_ids) : null;
 	const targets = systems.filter((id) => (only ? only.has(id) : body.overwrite || !have.has(id)));
-	const threshold = body.metric === "Status" || body.metric === "SystemdFailed" ? null : body.threshold;
+	const threshold = NO_THRESHOLD.has(body.metric) ? null : body.threshold;
 	const event = (EVENT_METRICS as readonly string[]).includes(body.metric);
 	const now = Date.now();
 	const stmts = targets.map((sid) => {
@@ -413,7 +421,7 @@ admin.put("/systems/:id/alerts", async (c) => {
 			// the next evaluation resolves or triggers against the new threshold.
 			const event = (EVENT_METRICS as readonly string[]).includes(a.metric);
 			const prev = existing.find((e) => e.metric === a.metric && (event || e.threshold === a.threshold));
-			const threshold = a.metric === "Status" || a.metric === "SystemdFailed" ? null : a.threshold;
+			const threshold = NO_THRESHOLD.has(a.metric) ? null : a.threshold;
 			return db
 				.prepare("INSERT INTO system_alerts(id, system_id, metric, threshold, minutes, triggered, last_value) VALUES (?, ?, ?, ?, ?, ?, ?)")
 				.bind(newId(), id, a.metric, threshold, a.minutes, prev?.triggered ? 1 : 0, event ? (prev?.last_value ?? null) : null);

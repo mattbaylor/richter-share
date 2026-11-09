@@ -1,4 +1,4 @@
-import type { ContainerPoint, PveSnapshot, StatsPoint, StatsRange, SystemInstall, SystemRecord, SystemStats } from "@shared/types";
+import type { ContainerPoint, PveSnapshot, SmartSnapshot, StatsPoint, StatsRange, SystemInstall, SystemRecord, SystemStats } from "@shared/types";
 import {
 	ArrowLeft,
 	Bell,
@@ -56,6 +56,7 @@ import { splitList } from "@/lib/utils";
 import { AlertsDialog } from "./AlertsDialog";
 import { InstallInfo } from "./InstallInfo";
 import { ProxmoxGuests } from "./ProxmoxGuests";
+import { SmartDisks } from "./SmartDisks";
 import { Packages, Services, scrollTo, UpdateChips } from "./SystemUpdates";
 import { useCanEdit } from "@/dashboard/role";
 
@@ -106,6 +107,7 @@ export function SystemDetail({ id }: { id: string }) {
 	const stats = useApi<StatsPoint[]>(`/api/admin/systems/${id}/stats?range=${range}`, { refreshMs: refresh });
 	const containers = useApi<ContainerPoint[]>(`/api/admin/systems/${id}/containers?range=${range}`, { refreshMs: refresh });
 	const pve = useApi<PveSnapshot | null>(`/api/admin/systems/${id}/pve`, { refreshMs: 60_000 });
+	const smart = useApi<SmartSnapshot>(`/api/admin/systems/${id}/smart`, { refreshMs: 300_000 });
 	const [alertsOpen, setAlertsOpen] = useState(false);
 	const [install, setInstall] = useState<SystemInstall>();
 	const [editing, setEditing] = useState(false);
@@ -613,6 +615,7 @@ export function SystemDetail({ id }: { id: string }) {
 								{efsioC}
 							</>,
 						)}
+						<SmartDisks snap={smart.data} />
 					</TabsContent>
 					{hasGpu && <TabsContent value="gpu">{chartArea(gpusC)}</TabsContent>}
 					{hasContainers && (
@@ -658,6 +661,8 @@ export function SystemDetail({ id }: { id: string }) {
 					)}
 
 					<Containers data={containers.data ?? []} xFormat={xFormat} />
+
+					<SmartDisks snap={smart.data} />
 
 					<ProxmoxGuests snap={pve.data} />
 

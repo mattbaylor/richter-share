@@ -35,12 +35,15 @@ function metricValue(metric: string, s: SystemStats): number | null {
 			return (s.ns + s.nr) / (1024 * 1024); // MB/s
 		case "GPU":
 			return s.g ? Math.max(...Object.values(s.g).map((g) => g.u)) : null;
+		case "Steal":
+			// CPU time the hypervisor gave to other guests: a VM's sign of an overcommitted host.
+			return s.cpub?.[3] ?? null;
 		default:
 			return null;
 	}
 }
 
-const UNIT: Record<string, string> = { CPU: "%", Memory: "%", Disk: "%", Temperature: "°C", LoadAvg5: "", Bandwidth: " MB/s", GPU: "%" };
+const UNIT: Record<string, string> = { CPU: "%", Memory: "%", Disk: "%", Temperature: "°C", LoadAvg5: "", Bandwidth: " MB/s", GPU: "%", Steal: "%" };
 
 /** Threshold alerts: average of 1m records over `minutes` crosses `threshold`. */
 export async function evaluateSystemAlerts(env: Env, systemId: string, systemName: string, preloaded?: AlertRow[], load?: StatsLoader): Promise<void> {
