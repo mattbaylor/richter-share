@@ -8,6 +8,7 @@ import { addEvent, getSetting, newId, newToken, parseJson, setSetting } from "..
 import type { Env } from "../env";
 import { installFor, toAnnouncement, toChannel, toMonitor, toPage, toSystem, type PageRow, type SystemRow } from "../mappers";
 import { liveSystems } from "../beszel/live";
+import { classifySystem, guestNameFromMonitor, systemKindContext } from "../../shared/system-kind";
 import { overlay, type HubView } from "../hub";
 import { hub, hubReload, hubView } from "../hub-client";
 import { latestPve, runCheck, utcDay, type MonitorRow } from "../monitors/engine";
@@ -218,8 +219,22 @@ async function closeAgent(env: Env, id: string, reason: string) {
 }
 
 admin.get("/systems", async (c) => {
-	const rows = await c.env.DB.prepare("SELECT * FROM systems ORDER BY name COLLATE NOCASE").all<SystemRow>();
-	return c.json((await liveSystems(c.env, rows.results)).map(({ infoObj: _, ...r }) => toSystem(r as SystemRow)));
+	const db = c.env.DB;
+	const [rows, guests] = await db.batch([
+		db.prepare("SELECT * FROM systems ORDER BY name COLLATE NOCASE"),
+		db.prepare("SELECT name, json_extract(config, '$.system_id') host_id, json_extract(config, '$.guest_type') type FROM monitors WHERE type = 'guest'"),
+	]);
+	const ctx = systemKindContext(
+		(guests.results as { name: string; host_id: string | null; type: string | null }[])
+			.filter((g) => g.host_id)
+			.map((g) => ({ host_id: g.host_id as string, name: guestNameFromMonitor(g.name), type: g.type === "qemu" ? "qemu" : "lxc" })),
+	);
+	return c.json(
+		(await liveSystems(c.env, rows.results as SystemRow[])).map(({ infoObj: _, ...r }) => {
+			const s = toSystem(r as SystemRow);
+			return { ...s, kind: classifySystem(s, ctx) };
+		}),
+	);
 });
 
 admin.post("/systems", async (c) => {

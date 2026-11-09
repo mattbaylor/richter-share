@@ -40,6 +40,7 @@ import type {
 } from "@shared/types";
 import { ApiError } from "./api";
 import { buildInstall } from "@shared/install";
+import { classifySystem, guestNameFromMonitor, systemKindContext } from "@shared/system-kind";
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -80,6 +81,8 @@ const systems: SystemRecord[] = [
 	mkSystem("mac-mini", "down", ["lab"], { h: "mac-mini.local", k: "24.1.0", c: 8, t: 8, m: "Apple M2", u: 0, os: 1 }),
 	mkSystem("pve02", "up", ["proxmox"], { h: "pve02", k: "6.8.12-9-pve", c: 16, t: 32, m: "AMD EPYC 7302P 16-Core", u: 3_100_000, os: 0 }),
 	mkSystem("backup-nas", "paused", ["storage"], { h: "nas", k: "14.1-RELEASE", c: 4, t: 4, m: "Intel Celeron N5105", u: 9_000_000, os: 3 }),
+	mkSystem("smtp-probe", "up", [], { h: "smtp-probe", k: "6.8.12-9-pve", c: 1, t: 1, m: "AMD EPYC 7302P 16-Core", u: 1_051_200, os: 0 }),
+	mkSystem("web", "down", [], { h: "web", k: "6.8.0-45-generic", c: 2, t: 2, m: "QEMU Virtual CPU version 2.5+", u: 0, os: 0 }),
 ];
 
 const profiles: Record<string, SysProfile> = {
@@ -89,6 +92,8 @@ const profiles: Record<string, SysProfile> = {
 	[systems[3].id]: { cpuBase: 12, memTotal: 16 * GB, memBase: 0.6, disk: 512 * GB, diskUsed: 0.5, cores: 8, temps: [] },
 	[systems[4].id]: { cpuBase: 18, memTotal: 128 * GB, memBase: 0.45, disk: 94 * GB, diskUsed: 0.2, cores: 32, temps: ["k10temp_tctl", "nvme0"] },
 	[systems[5].id]: { cpuBase: 6, memTotal: 16 * GB, memBase: 0.3, disk: 16000 * GB, diskUsed: 0.7, cores: 4, temps: ["cpu"] },
+	[systems[6].id]: { cpuBase: 3, memTotal: 0.5 * GB, memBase: 0.38, disk: 8 * GB, diskUsed: 0.14, cores: 1, temps: [] },
+	[systems[7].id]: { cpuBase: 9, memTotal: 4 * GB, memBase: 0.5, disk: 32 * GB, diskUsed: 0.4, cores: 2, temps: [] },
 };
 
 function mkSystem(name: string, status: SystemRecord["status"], tags: string[], info: SystemRecord["info"]): SystemRecord {
@@ -190,7 +195,7 @@ function refreshSystemInfo() {
 	for (const s of systems) {
 		if (s.status !== "up") continue;
 		const st = genStats(s.id, now());
-		s.info = { ...s.info, pu: s.id === systems[0].id ? [8, 2] : [0, 0], sv: s.id === systems[0].id ? [6, 1] : [4, 0], cpu: st.cpu, mp: st.mp, dp: st.dp, la: st.la, bb: st.ns + st.nr, dt: st.t ? Math.max(...Object.values(st.t)) : undefined, g: st.g ? Object.values(st.g)[0].u : undefined, efs: st.efs ? { "/mnt/backup": 65 } : undefined };
+		s.info = { ...s.info, pu: s.id === systems[0].id ? [8, 2] : [0, 0], sv: s.id === systems[0].id ? [6, 1] : [4, 0], cpu: st.cpu, mp: st.mp, dp: st.dp, la: st.la, bb: st.ns + st.nr, dt: st.t && Object.keys(st.t).length ? Math.max(...Object.values(st.t)) : undefined, g: st.g ? Object.values(st.g)[0].u : undefined, efs: st.efs ? { "/mnt/backup": 65 } : undefined };
 		s.last_seen = now() - Math.floor(rand() * 30_000);
 	}
 }
@@ -551,7 +556,15 @@ on("PUT", `${A}/settings`, (_, b) => Object.assign(settings, b));
 
 on("GET", `${A}/systems`, () => {
 	refreshSystemInfo();
-	return systems;
+	const ctx = systemKindContext(
+		monitors
+			.filter((m) => m.type === "guest")
+			.map((m) => {
+				const c = m.config as { system_id: string; guest_type: "lxc" | "qemu" };
+				return { host_id: c.system_id, name: guestNameFromMonitor(m.name), type: c.guest_type };
+			}),
+	);
+	return systems.map((s) => ({ ...s, kind: classifySystem(s, ctx) }));
 });
 on("POST", `${A}/systems`, (_, b) => {
 	if (!b?.name) throw new ApiError("name is required", 400, "name");

@@ -102,7 +102,11 @@ export interface SystemRecord {
 	 * Down and count it (60 = 1 min, the default and minimum). Dashboard and alerts ignore it.
 	 */
 	down_after: number;
+	/** Physical host, VM or LXC container (see classifySystem). Set by the systems list. */
+	kind?: SystemKind;
 }
+
+export type SystemKind = "physical" | "vm" | "lxc";
 
 export interface SystemInstall {
 	hub_url: string;

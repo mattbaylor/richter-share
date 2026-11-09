@@ -1,5 +1,5 @@
-import type { SystemRecord } from "@shared/types";
-import { ArrowDown, ArrowUp, ArrowUpDown, Cpu, HardDrive, LayoutGrid, MemoryStick, Package, Plus, Search, Server, ShieldAlert, Table2, TerminalSquare, Thermometer, Wifi } from "lucide-react";
+import type { SystemKind, SystemRecord } from "@shared/types";
+import { ArrowDown, ArrowUp, ArrowUpDown, Cpu, HardDrive, LayoutGrid, MemoryStick, Package, Palette, Plus, Search, Server, ShieldAlert, Table2, TerminalSquare, Thermometer, Wifi } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { StatusDot, TagChip } from "@/components/ui/badge";
@@ -40,6 +40,15 @@ const SORTERS: Record<SortKey, (s: SystemRecord) => number | string> = {
 };
 
 const isLive = (s: SystemRecord) => s.status === "up";
+
+/** Row tint and swatch per system type, used when "Shade by type" is on. */
+const KIND: Record<SystemKind, { label: string; row: string; stripe: string; card: string; swatch: string }> = {
+	physical: { label: "Physical", row: "bg-amber-500/10 hover:bg-amber-500/15", stripe: "shadow-[inset_3px_0_0_var(--color-amber-500)]", card: "bg-amber-500/10 border-amber-500/30", swatch: "bg-amber-500" },
+	vm: { label: "VM", row: "bg-sky-500/10 hover:bg-sky-500/15", stripe: "shadow-[inset_3px_0_0_var(--color-sky-500)]", card: "bg-sky-500/10 border-sky-500/30", swatch: "bg-sky-500" },
+	lxc: { label: "LXC", row: "bg-violet-500/10 hover:bg-violet-500/15", stripe: "shadow-[inset_3px_0_0_var(--color-violet-500)]", card: "bg-violet-500/10 border-violet-500/30", swatch: "bg-violet-500" },
+};
+const KINDS = Object.keys(KIND) as SystemKind[];
+type KindFilter = "all" | SystemKind;
 
 type ColumnId = Exclude<SortKey, "name">;
 interface Column {
@@ -120,6 +129,8 @@ export function SystemsPage() {
 	const [query, setQuery] = useState("");
 	const [tags, setTags] = useState<string[]>([]);
 	const [view, setView] = useLocalStorage<"table" | "grid">("richter-systems-view", "table");
+	const [kind, setKind] = useLocalStorage<KindFilter>("richter-systems-kind", "all");
+	const [shade, setShade] = useLocalStorage<boolean>("richter-systems-shade", false);
 	const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "name", dir: 1 });
 	const [adding, setAdding] = useState(false);
 	const cols = useHiddenColumns("richter-systems-hidden-columns");
@@ -134,7 +145,8 @@ export function SystemsPage() {
 		const list = (data ?? []).filter(
 			(s) =>
 				(!q || s.name.toLowerCase().includes(q) || s.info?.h?.toLowerCase().includes(q) || s.tags.some((t) => t.toLowerCase().includes(q))) &&
-				tags.every((t) => s.tags.includes(t)),
+				tags.every((t) => s.tags.includes(t)) &&
+				(kind === "all" || s.kind === kind),
 		);
 		const f = SORTERS[sort.key];
 		return list.sort((a, b) => {
@@ -142,7 +154,13 @@ export function SystemsPage() {
 			const y = f(b);
 			return (x < y ? -1 : x > y ? 1 : 0) * sort.dir;
 		});
-	}, [data, query, tags, sort]);
+	}, [data, query, tags, kind, sort]);
+
+	const kindCounts = useMemo(() => {
+		const c: Record<SystemKind, number> = { physical: 0, vm: 0, lxc: 0 };
+		for (const s of data ?? []) if (s.kind) c[s.kind]++;
+		return c;
+	}, [data]);
 
 	const counts = useMemo(() => {
 		const c = { up: 0, down: 0, other: 0 };
@@ -196,12 +214,40 @@ export function SystemsPage() {
 						<Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 						<Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter systems…" className="pl-8" />
 					</div>
+					<Segmented
+						value={kind}
+						onChange={setKind}
+						options={[
+							{ value: "all", label: "All", title: "All system types" },
+							...KINDS.map((k) => ({
+								value: k,
+								label: (
+									<>
+										{shade && <span className={cn("size-2 rounded-full", KIND[k].swatch)} />}
+										{KIND[k].label}
+										<span className="tabular-nums opacity-60">{kindCounts[k]}</span>
+									</>
+								),
+								title: `${KIND[k].label} systems only`,
+							})),
+						]}
+					/>
 					<div className="flex flex-wrap gap-1.5">
 						{allTags.map((t) => (
 							<TagChip key={t} tag={t} active={tags.includes(t)} onClick={() => setTags((xs) => (xs.includes(t) ? xs.filter((x) => x !== t) : [...xs, t]))} />
 						))}
 					</div>
 					<div className="ml-auto flex items-center gap-2">
+						<Button
+							variant="outline"
+							size="sm"
+							aria-pressed={shade}
+							title="Tint each row by system type: physical, VM or LXC"
+							className={cn(shade && "border-primary/50 bg-primary/10 text-primary")}
+							onClick={() => setShade(!shade)}
+						>
+							<Palette className="size-3.5" /> Shade by type
+						</Button>
 						{view === "table" && (
 							<ColumnsMenu
 								columns={available.map((c) => ({ id: c.id, label: c.label }))}
@@ -249,7 +295,7 @@ export function SystemsPage() {
 			) : data && rows.length === 0 ? (
 				<Card>
 					<EmptyState icon={Search} title="No matching systems">
-						Nothing matches the current search or tag filter.
+						Nothing matches the current search, type or tag filter.
 					</EmptyState>
 				</Card>
 			) : data && view === "table" ? (
@@ -265,8 +311,8 @@ export function SystemsPage() {
 							{rows.map((s) => {
 								const live = isLive(s);
 								return (
-									<Tr key={s.id} className="cursor-pointer" onClick={() => navigate(`/systems/${s.id}`)}>
-										<Td className="pl-4">
+									<Tr key={s.id} className={cn("cursor-pointer", shade && s.kind && KIND[s.kind].row)} onClick={() => navigate(`/systems/${s.id}`)}>
+										<Td className={cn("pl-4", shade && s.kind && KIND[s.kind].stripe)}>
 											<div className="flex items-center gap-2.5">
 												<Tooltip content={`${STATUS_LABEL[s.status]} · last seen ${timeAgo(s.last_seen)}`}>
 													<span>
@@ -297,7 +343,7 @@ export function SystemsPage() {
 			) : data ? (
 				<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
 					{rows.map((s) => (
-						<SystemCard key={s.id} system={s} />
+						<SystemCard key={s.id} system={s} shade={shade} />
 					))}
 				</div>
 			) : null}
@@ -307,7 +353,7 @@ export function SystemsPage() {
 	);
 }
 
-function SystemCard({ system: s }: { system: SystemRecord }) {
+function SystemCard({ system: s, shade }: { system: SystemRecord; shade: boolean }) {
 	const live = isLive(s);
 	const row = (label: string, value: React.ReactNode) => (
 		<div className="flex items-center justify-between gap-3 text-sm">
@@ -317,10 +363,11 @@ function SystemCard({ system: s }: { system: SystemRecord }) {
 	);
 	return (
 		<Link href={`/systems/${s.id}`}>
-			<Card className="h-full p-4 transition-colors hover:border-primary/40">
+			<Card className={cn("h-full p-4 transition-colors hover:border-primary/40", shade && s.kind && KIND[s.kind].card)}>
 				<div className="mb-3 flex items-center gap-2.5">
 					<StatusDot status={s.status} pulse={s.status === "down"} />
 					<span className="truncate font-semibold">{s.name}</span>
+					{s.kind && <span className="rounded border px-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{KIND[s.kind].label}</span>}
 					<span className="ml-auto text-xs text-muted-foreground">{live ? formatDuration(s.info?.u) : STATUS_LABEL[s.status]}</span>
 				</div>
 				<div className={cn("space-y-2", !live && "opacity-40")}>
