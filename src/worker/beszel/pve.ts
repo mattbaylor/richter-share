@@ -94,7 +94,9 @@ export function checkGuest(cfg: GuestMonitorConfig, snap: PveSnapshot | null, no
 	if (g.status === "running") {
 		const parts = ["running", uptimeText(g.uptime)];
 		const warns: string[] = [];
-		const mem = pct(g.mem, g.maxmem);
+		// A VM that doesn't report its own memory use (balloon disabled, or no virtio balloon driver,
+		// e.g. Windows with balloon: 0 or pfSense) shows mem == maxmem: unknown, not 100% used.
+		const mem = g.type === "qemu" && g.maxmem && (g.mem ?? 0) >= g.maxmem ? null : pct(g.mem, g.maxmem);
 		const memWarn = cfg.mem_warn ?? DEFAULT_WARN;
 		if (mem != null) {
 			parts.push(`mem ${mem.toFixed(0)}%`);

@@ -69,6 +69,12 @@ describe("checkGuest", () => {
 		const s: PveSnapshot = { ...snap, guests: [{ ...snap.guests[0], status: "running", mem: 1 * GiB, uptime: 60 }] };
 		expect(checkGuest(vm(101), s, NOW)!.message).toBe("running · up 0 h 1 min · mem 25%");
 	});
+	it("VM memory is unknown when the guest reports none (mem equals the whole allocation)", () => {
+		const full: PveSnapshot = { ...snap, guests: [{ ...snap.guests[0], status: "running", mem: snap.guests[0].maxmem, uptime: 60 }] };
+		expect(checkGuest(vm(101), full, NOW)).toMatchObject({ ok: true, degraded: false, message: "running · up 0 h 1 min" });
+		const high: PveSnapshot = { ...snap, guests: [{ ...snap.guests[0], status: "running", mem: snap.guests[0].maxmem! - GiB / 8, uptime: 60 }] };
+		expect(checkGuest(vm(101), high, NOW)!.message).toContain("memory 97%");
+	});
 	it("a stopped guest locked for backup is degraded, not down", () => {
 		const s: PveSnapshot = { ...snap, guests: snap.guests.map((g) => (g.vmid === 101 ? { ...g, lock: "backup" } : g)) };
 		expect(checkGuest(vm(101), s, NOW)).toMatchObject({ ok: true, degraded: true, message: "Stopped, locked (backup)" });
