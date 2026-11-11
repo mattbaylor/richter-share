@@ -62,7 +62,7 @@ export function IncidentsPage() {
 // ---- Incidents -----------------------------------------------------------------
 
 function Incidents() {
-	const { data, error, loading, reload } = useApi<Incident[]>("/api/admin/incidents", { refreshMs: 30_000 });
+	const { data, error, loading, reload } = useApi<Incident[]>("/api/admin/incidents", { refreshMs: 15_000 });
 	if (error && !data) return <ErrorState error={error} onRetry={reload} />;
 	if (loading && !data)
 		return (

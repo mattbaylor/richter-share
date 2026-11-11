@@ -78,7 +78,7 @@ function SecurityMark() {
 
 export function Packages({ systemId, info }: { systemId: string; info: SystemInfo | null | undefined }) {
 	const enabled = !!info?.pu?.length;
-	const snap = useApi<PackageSnapshot>(enabled ? `/api/admin/systems/${systemId}/packages` : null, { refreshMs: 300_000 });
+	const snap = useApi<PackageSnapshot>(enabled ? `/api/admin/systems/${systemId}/packages` : null, { refreshMs: 60_000 });
 	const [filter, setFilter] = useState("");
 	// Security first by default (then biggest change); click a header to sort like Beszel's table.
 	const [sort, setSort] = useState<{ key: PkgSort; dir: 1 | -1 }>({ key: "security", dir: 1 });
@@ -223,7 +223,7 @@ const ORDER = [2, 3, 5, 4, 0, 1]; // failed first, then transitional, active, in
 
 export function Services({ systemId, info }: { systemId: string; info: SystemInfo | null | undefined }) {
 	const enabled = !!info?.sv?.length;
-	const snap = useApi<ServicesSnapshot>(enabled ? `/api/admin/systems/${systemId}/services` : null, { refreshMs: 300_000 });
+	const snap = useApi<ServicesSnapshot>(enabled ? `/api/admin/systems/${systemId}/services` : null, { refreshMs: 60_000 });
 	const [filter, setFilter] = useState("");
 	const sorted = useMemo(
 		() => [...(snap.data?.services ?? [])].sort((a: SystemdService, b: SystemdService) => ORDER.indexOf(a.s) - ORDER.indexOf(b.s) || a.n.localeCompare(b.n)),

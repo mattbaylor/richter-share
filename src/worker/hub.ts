@@ -665,9 +665,7 @@ export class Hub extends DurableObject<Env> {
 		try {
 			await this.loadCfg(now);
 			this.roll(now);
-			const sysRows = (await this.db.prepare("SELECT id, name, status, down_after FROM systems").all<{ id: string; name: string; status: string; down_after: number | null }>()).results;
-			const sysMap = new Map(sysRows.map((r) => [r.id, r]));
-			const maint = this.maintenance(now);
+			const { sysRows, maint, inMaint, deps } = await this.checkContext(now);
 			this.accountSystems(sysRows, maint.systems, now);
 			this.recordCpu(sysRows, cpu, now);
 
@@ -691,20 +689,6 @@ export class Hub extends DurableObject<Env> {
 				queue.push(m);
 			}
 			if (skipped) console.warn(`subrequest budget exhausted: ${skipped} monitors deferred to next minute`);
-			const inMaint = (m: MonitorRow) => {
-				const sys = systemOf(m);
-				return maint.monitors.has(m.id) || (m.parent_id != null && maint.monitors.has(m.parent_id)) || (sys != null && maint.systems.has(sys));
-			};
-			// One snapshot read per Proxmox host per tick, shared by all of its guest monitors.
-			const pveCache = new Map<string, ReturnType<typeof latestPve>>();
-			const deps = {
-				system: (id: string) => sysMap.get(id) ?? null,
-				containers: (id: string) => latestContainers(this.env, id),
-				pve: (id: string) => {
-					if (!pveCache.has(id)) pveCache.set(id, latestPve(this.env, id));
-					return pveCache.get(id)!;
-				},
-			};
 			let ran = 0;
 			const worker = async () => {
 				for (let m = queue.shift(); m; m = queue.shift()) {
@@ -733,6 +717,69 @@ export class Hub extends DurableObject<Env> {
 		} finally {
 			this.busy = 0;
 		}
+	}
+
+	/** What a round of checks needs: systems, maintenance windows and shared per-tick lookups. */
+	private async checkContext(now: number) {
+		const sysRows = (await this.db.prepare("SELECT id, name, status, down_after FROM systems").all<{ id: string; name: string; status: string; down_after: number | null }>()).results;
+		const sysMap = new Map(sysRows.map((r) => [r.id, r]));
+		const maint = this.maintenance(now);
+		const inMaint = (m: MonitorRow) => {
+			const sys = systemOf(m);
+			return maint.monitors.has(m.id) || (m.parent_id != null && maint.monitors.has(m.parent_id)) || (sys != null && maint.systems.has(sys));
+		};
+		// One snapshot read per Proxmox host per round, shared by all of its guest monitors.
+		const pveCache = new Map<string, ReturnType<typeof latestPve>>();
+		const deps = {
+			system: (id: string) => sysMap.get(id) ?? null,
+			containers: (id: string) => latestContainers(this.env, id),
+			pve: (id: string) => {
+				if (!pveCache.has(id)) pveCache.set(id, latestPve(this.env, id));
+				return pveCache.get(id)!;
+			},
+		};
+		return { sysRows, maint, inMaint, deps };
+	}
+
+	/**
+	 * "Check now" from the dashboard: run these monitors right away as real checks (state machine,
+	 * history, incidents and notifications, exactly like a cron tick) and return their live state.
+	 * Paused monitors are skipped; groups are re-derived from their children afterwards.
+	 */
+	async checkNow(ids: string[]): Promise<{ checked: number; live: Record<string, Live> }> {
+		await this.ready();
+		const now = Date.now();
+		await this.loadCfg(now, true);
+		const want = new Set(ids);
+		const mons = this.cfg!.monitors.filter((m) => want.has(m.id) && !m.paused && m.type !== "group");
+		const { inMaint, deps, maint } = await this.checkContext(now);
+		let checked = 0;
+		await Promise.all(
+			mons.map(async (row) => {
+				const m = overlay(row, this.live(row));
+				try {
+					const raw = await runCheck(this.env, m, now, deps);
+					if (!raw) return;
+					await this.record(m, raw, inMaint(m), Date.now());
+					checked++;
+				} catch (e) {
+					console.error(`monitor ${m.id} check-now failed`, (e as Error).stack);
+				}
+			}),
+		);
+		if (checked) {
+			this.mustSave = true;
+			this.version++;
+			this.pages.clear();
+		}
+		// Groups only re-evaluate when due: make the parents of what just ran due now.
+		for (const m of mons) if (m.parent_id && this.S.live[m.parent_id]) this.S.live[m.parent_id].next_check_at = now;
+		await this.groups(maint.monitors, now);
+		await this.flush();
+		await this.persist(now);
+		const live: Record<string, Live> = {};
+		for (const id of ids) if (this.S.live[id]) live[id] = this.S.live[id];
+		return { checked, live };
 	}
 
 	/** Group monitors take the worst status of their (unpaused) children. */

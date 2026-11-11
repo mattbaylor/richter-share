@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Segmented } from "@/components/ui/tabs";
 import { useAction, useToast } from "@/components/ui/toast";
 import { formatDateTime, formatDay, formatDurationMs, formatMs, formatTime, formatUptime, timeAgo } from "@/lib/format";
-import { useApi, useDocumentTitle } from "@/lib/hooks";
+import { refreshAll, useApi, useDocumentTitle } from "@/lib/hooks";
 import { CHART_COLORS, CHECK_STATUS, MONITOR_TYPE_LABEL } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import { HeartbeatBar, monitorTarget, uptimeColor } from "./shared";
@@ -28,10 +28,10 @@ export function MonitorDetail({ id }: { id: string }) {
 	const toast = useToast();
 	const { run, busy } = useAction();
 	const [hours, setHours] = useState<"24" | "168">("24");
-	const mon = useApi<Monitor>(`/api/admin/monitors/${id}`, { refreshMs: 30_000 });
-	const checks = useApi<CheckPoint[]>(`/api/admin/monitors/${id}/checks?hours=${hours}`, { refreshMs: 60_000 });
-	const uptime = useApi<UptimeSummary>(`/api/admin/monitors/${id}/uptime`, { refreshMs: 60_000 });
-	const incidents = useApi<Incident[]>(`/api/admin/monitors/${id}/incidents`, { refreshMs: 60_000 });
+	const mon = useApi<Monitor>(`/api/admin/monitors/${id}`, { refreshMs: 10_000 });
+	const checks = useApi<CheckPoint[]>(`/api/admin/monitors/${id}/checks?hours=${hours}`, { refreshMs: 20_000 });
+	const uptime = useApi<UptimeSummary>(`/api/admin/monitors/${id}/uptime`, { refreshMs: 20_000 });
+	const incidents = useApi<Incident[]>(`/api/admin/monitors/${id}/incidents`, { refreshMs: 20_000 });
 	const systems = useApi<SystemRecord[]>("/api/admin/systems");
 	const [result, setResult] = useState<CheckNowResult>();
 	useDocumentTitle(mon.data ? `${mon.data.name} · Richter` : undefined);
@@ -114,7 +114,10 @@ export function MonitorDetail({ id }: { id: string }) {
 									loading={busy === "check"}
 									onClick={async () => {
 										const r = await run("check", () => admin.post<CheckNowResult>(`/monitors/${id}/check-now`));
-										if (r) setResult(r);
+										if (r) {
+											setResult(r);
+											refreshAll(); // the check was recorded: status, history and incidents all moved
+										}
 									}}
 								>
 									<Zap /> Check now

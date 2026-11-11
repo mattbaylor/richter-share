@@ -160,6 +160,30 @@ describe("Hub", () => {
 		expect(d1.sql.prepare("SELECT resolved_at FROM incidents WHERE id = 'orphan'").get()).not.toEqual({ resolved_at: null });
 	});
 
+	it("checkNow runs a monitor immediately, records it, and leaves paused monitors alone", async () => {
+		d1.sql.prepare("INSERT INTO systems(id, name, token, status, created_at) VALUES ('s1', 'box', 't1', 'down', ?)").run(T0);
+		const ins = d1.sql.prepare(
+			`INSERT INTO monitors(id, name, type, config, interval_s, retries, retry_interval_s, timeout_ms, next_check_at, created_at, status, paused)
+			 VALUES (?, ?, 'system', '{"system_id":"s1"}', 600, 0, 60, 10000, ?, ?, 'pending', ?)`,
+		);
+		ins.run("sm", "box agent", T0, T0, 0);
+		ins.run("sp", "box paused", T0, T0, 1);
+		await hubObj.reload({});
+		await minute(1);
+		expect((await hubObj.monitorState("sm")).live?.status).toBe("down");
+		// The agent is back; the next scheduled check is 10 minutes away, "Check now" doesn't wait for it.
+		d1.sql.prepare("UPDATE systems SET status = 'up' WHERE id = 's1'").run();
+		vi.advanceTimersByTime(5_000);
+		const r = await hubObj.checkNow(["sm", "sp"]);
+		expect(r.checked).toBe(1);
+		expect(r.live.sm.status).toBe("up");
+		expect(r.live.sm.last_check_at).toBe(Date.now());
+		expect(r.live.sp.last_check_at).toBeNull();
+		expect(d1.sql.prepare("SELECT status FROM monitors WHERE id = 'sm'").get()).toEqual({ status: "up" });
+		expect(d1.sql.prepare("SELECT resolved_at FROM incidents WHERE monitor_id = 'sm'").get()).not.toEqual({ resolved_at: null });
+		expect((await hubObj.checks("sm", T0)).map((p) => p.status)).toEqual([0, 1]);
+	});
+
 	it("survives a restart from DO storage and flushes history hourly", async () => {
 		await minute(5, true);
 		hubObj = make(); // new isolate: state comes back from storage, not D1

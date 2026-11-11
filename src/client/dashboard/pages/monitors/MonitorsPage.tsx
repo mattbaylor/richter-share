@@ -31,7 +31,7 @@ const MONITOR_COLUMNS = [
 export function MonitorsPage() {
 	useDocumentTitle("Monitors · Richter");
 	const canEdit = useCanEdit();
-	const { data, error, loading, reload } = useApi<MonitorListItem[]>("/api/admin/monitors", { refreshMs: 60_000 });
+	const { data, error, loading, reload } = useApi<MonitorListItem[]>("/api/admin/monitors", { refreshMs: 15_000 });
 	const systems = useApi<SystemRecord[]>("/api/admin/systems");
 	const [query, setQuery] = useState("");
 	const [status, setStatus] = useState<StatusFilter>("all");
