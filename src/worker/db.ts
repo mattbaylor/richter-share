@@ -175,7 +175,11 @@ export async function ensureSchema(db: D1Database): Promise<void> {
 	try {
 		const row = await db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").first<{ value: string }>();
 		version = row ? Number(row.value) : 0;
-	} catch {
+	} catch (e) {
+		// Only a database without a settings table is new. Any other failure (a D1 timeout, an overloaded
+		// primary) must not be read as "version 0": that re-runs every migration, and once an ALTER TABLE
+		// hits a column that already exists the stored version is stuck and every isolate fails to start.
+		if (!/no such table/i.test(String((e as Error)?.message ?? e))) throw e;
 		version = 0;
 	}
 	for (let i = version; i < MIGRATIONS.length; i++) {
