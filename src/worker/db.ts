@@ -1,6 +1,9 @@
 import type { Env } from "./env";
 
-/** Ordered, idempotent migrations. Append only — never edit a shipped entry. */
+/**
+ * Ordered, idempotent migrations. Append only — never edit a shipped entry, except to make it safe to
+ * re-run on a database it was already applied to (see migration 3).
+ */
 export const MIGRATIONS: string[] = [
 	`
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -64,7 +67,10 @@ CREATE TABLE IF NOT EXISTS system_services (system_id TEXT PRIMARY KEY, services
 	// Storage redesign: check history packed into one JSON row per monitor per hour, a per-system daily
 	// up/down rollup, monitor_daily rebuilt WITHOUT ROWID (one write per upsert instead of two), and the
 	// indexes nothing needs dropped. Live monitor state lives in the Hub Durable Object (hub.ts).
+	// `checks` is recreated first (empty, if it was already dropped) so a re-run cannot fail on it.
 	`
+CREATE TABLE IF NOT EXISTS checks (monitor_id TEXT NOT NULL, ts INTEGER NOT NULL, status INTEGER NOT NULL,
+  latency_ms INTEGER, message TEXT, PRIMARY KEY (monitor_id, ts));
 CREATE TABLE IF NOT EXISTS check_buckets (monitor_id TEXT NOT NULL, hour INTEGER NOT NULL, data TEXT NOT NULL,
   PRIMARY KEY (monitor_id, hour)) WITHOUT ROWID;
 INSERT OR REPLACE INTO check_buckets(monitor_id, hour, data)
@@ -169,16 +175,41 @@ ALTER TABLE systems ADD COLUMN works_with TEXT NOT NULL DEFAULT '[]'
 
 let migratedIsolate = false;
 
+const VERSION_READ_ATTEMPTS = 3;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The applied schema version. Only a missing `settings` table means a fresh database (0); any other
+ * failure is retried and then thrown. (Reading a transient D1 error as 0 re-ran every migration and,
+ * on 2026-11-17, left schema_version at 2 on a fully migrated database.)
+ */
+export async function readSchemaVersion(db: D1Database): Promise<number> {
+	let last: unknown;
+	for (let attempt = 0; attempt < VERSION_READ_ATTEMPTS; attempt++) {
+		if (attempt) await sleep(100 * 2 ** attempt);
+		try {
+			const row = await db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").first<{ value: string }>();
+			if (!row) return 0;
+			const v = Number(row.value);
+			if (!Number.isInteger(v) || v < 0) throw new Error(`schema_version is not a version: ${JSON.stringify(row.value)}`);
+			return v;
+		} catch (e) {
+			if (/no such table: settings/i.test(String((e as Error)?.message ?? e))) return 0;
+			last = e;
+		}
+	}
+	throw last;
+}
+
+/** Never lowers the stored version, so re-running an old migration cannot roll it back. */
+const BUMP_VERSION = `INSERT INTO settings(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  WHERE CAST(settings.value AS INTEGER) < CAST(excluded.value AS INTEGER)`;
+
 export async function ensureSchema(db: D1Database): Promise<void> {
 	if (migratedIsolate) return;
-	let version = 0;
-	try {
-		const row = await db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").first<{ value: string }>();
-		version = row ? Number(row.value) : 0;
-	} catch {
-		version = 0;
-	}
-	for (let i = version; i < MIGRATIONS.length; i++) {
+	let version = await readSchemaVersion(db);
+	while (version < MIGRATIONS.length) {
+		const i = version;
 		const stmts = MIGRATIONS[i]
 			.split(";")
 			.map((s) => s.trim())
@@ -186,15 +217,18 @@ export async function ensureSchema(db: D1Database): Promise<void> {
 			.map((s) => db.prepare(s));
 		// The version bump rides in the same batch (one transaction), so a migration is applied
 		// exactly once even if the isolate dies right after it.
-		stmts.push(
-			db.prepare("INSERT INTO settings(key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(String(i + 1)),
-		);
+		stmts.push(db.prepare(BUMP_VERSION).bind(String(i + 1)));
 		try {
 			await db.batch(stmts);
+			version = i + 1;
 		} catch (e) {
-			// Another isolate may have migrated concurrently (its batch committed, ours then failed).
-			const row = await db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").first<{ value: string }>().catch(() => null);
-			if (Number(row?.value ?? 0) > i) continue;
+			// Another isolate may have migrated concurrently (its batch committed, ours then failed):
+			// carry on from the version it reached, not from i + 1.
+			const now = await readSchemaVersion(db).catch(() => i);
+			if (now > i) {
+				version = now;
+				continue;
+			}
 			throw e;
 		}
 	}
